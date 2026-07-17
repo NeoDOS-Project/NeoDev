@@ -1,0 +1,10 @@
+[package]
+name = "neodev-example-backend"
+version = "0.1.0"
+edition = "2021"
+description = "Example VM backend plugin for NeoDev"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]

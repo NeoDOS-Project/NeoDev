@@ -4,7 +4,7 @@
 
 | ID | Description | Priority | Complexity | Architectural Impact |
 |----|-------------|----------|------------|---------------------|
-| IMP-1 | **Plugin system for backends**: dynamic loading of VM backends via shared library | Low | High | High — requires trait object refactoring, dynamic loading |
+| IMP-1 | **Plugin system for backends**: dynamic loading of VM backends via shared library | High | High | High — requires trait object refactoring, dynamic loading (IMPLEMENTED) |
 | IMP-2 | **Test result persistence**: save test results to JSON/YAML for CI consumption | Medium | Low | Low — new module, no existing changes |
 | IMP-3 | **Parallel builds**: build kernel, bootloader, user bins concurrently | Medium | Medium | Medium — requires async/thread coordination |
 | IMP-4 | **Layered config validation**: validate neodev.toml schema on load with descriptive errors | Low | Low | Low — better error messages |

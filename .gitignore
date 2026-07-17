@@ -1,5 +1,9 @@
 /target/
+examples/*/target/
 *.log
 *.img
 *.vdi
 *.fd
+*.so
+*.dylib
+*.dll

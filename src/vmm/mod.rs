@@ -52,8 +52,28 @@ pub fn create_backend(name: &str) -> Result<Box<dyn HypervisorBackend>> {
     match name {
         "qemu" => Ok(Box::new(qemu::QemuBackend)),
         "virtualbox" => Ok(Box::new(vbox::VirtualBoxBackend)),
-        _ => anyhow::bail!("Unknown backend '{}'. Use: qemu, virtualbox", name),
+        _ => {
+            let plugin_dir = default_plugin_dir();
+            match plugin::find_plugin_backend(&plugin_dir, name)? {
+                Some(backend) => Ok(Box::new(backend)),
+                None => anyhow::bail!(
+                    "Unknown backend '{}'. Use: qemu, virtualbox, or load a plugin from '{}'",
+                    name,
+                    plugin_dir.display()
+                ),
+            }
+        }
     }
+}
+
+fn default_plugin_dir() -> std::path::PathBuf {
+    std::env::var("NEODEV_PLUGIN_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".local/share/neodev/plugins"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("/usr/local/lib/neodev/plugins"))
+        })
 }
 
 pub fn vmcfg_from_config(cfg: &Config) -> VmConfig {
@@ -91,3 +111,4 @@ pub fn print_vm_status(status: &VmStatus) {
 
 mod qemu;
 mod vbox;
+mod plugin;
