@@ -155,7 +155,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
             for entry in entries {
                 if entry.is_dir {
                     let subdir_path = if *dirpath == root_marker { format!("/{}", entry.name) }
-                        else { format!("/{}", dirpath.trim_start_matches('/')) };
+                        else { format!("/{}/{}", dirpath.trim_start_matches('/'), entry.name) };
                     let subdir_path = if subdir_path.starts_with('/') { subdir_path } else { format!("/{}", subdir_path) };
                     let subdir_lba = dir_lba_map.get(&subdir_path).copied().unwrap_or(0);
                     node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, 0, subdir_lba, 0, &[])));
