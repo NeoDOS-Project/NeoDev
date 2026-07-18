@@ -1,4 +1,5 @@
 mod build;
+mod check_deps;
 mod clean;
 mod config;
 mod discovery;
@@ -181,6 +182,10 @@ enum Commands {
         /// Build NXP for a specific user binary
         name: Option<String>,
     },
+    /// Check cross-subsystem dependencies
+    #[command(visible_alias = "deps")]
+    CheckDeps,
+
     /// Manage NeoDOS virtual machines
     Vm {
         #[command(subcommand)]
@@ -251,6 +256,7 @@ fn main() -> Result<()> {
         Commands::Config => cmd_config(&cfg),
         Commands::List => cmd_list(&cfg),
         Commands::Nxp { all, name } => cmd_nxp(&cfg, &disc, *all, name.as_deref()),
+        Commands::CheckDeps => cmd_check_deps(&cfg),
         Commands::Vm { action } => cmd_vm(&cfg, action),
     }
 }
@@ -476,6 +482,11 @@ fn cmd_list(cfg: &config::Config) -> Result<()> {
 
 fn cmd_nxp(cfg: &config::Config, disc: &discovery::Discovery, all: bool, name: Option<&str>) -> Result<()> {
     build::build_nxp_packages(cfg, disc, all, name)
+}
+
+fn cmd_check_deps(cfg: &config::Config) -> Result<()> {
+    let kernel_src = cfg.neodos_root.join("neodos-kernel").join("src");
+    check_deps::run_check_deps(&kernel_src)
 }
 
 fn cmd_vm(cfg: &config::Config, action: &VmAction) -> Result<()> {

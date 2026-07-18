@@ -432,14 +432,31 @@ pub fn create_gpt_image(cfg: &Config, esp_image: &Path, neodos_image: &Path, out
     Ok(())
 }
 
+fn ensure_gen_hiv(cfg: &Config) -> Result<()> {
+    let gen_hiv_path = cfg.neodos_root.join("tools").join("gen-hiv").join("target").join("release").join("gen-hiv");
+    if !gen_hiv_path.exists() {
+        println!("  {} Building gen-hiv...", "[*]".bold().cyan());
+        let status = Command::new("cargo")
+            .args(["build", "--release"])
+            .current_dir(cfg.neodos_root.join("tools").join("gen-hiv"))
+            .status()
+            .context("Failed to build gen-hiv")?;
+        if !status.success() {
+            anyhow::bail!("gen-hiv build failed");
+        }
+    }
+    Ok(())
+}
+
 pub fn generate_registry_hive(cfg: &Config) -> Result<()> {
     println!("{} Generating SYSTEM.HIV registry hive...", "[*]".bold().cyan());
-    let gen_script = cfg.neodos_root.join("scripts").join("gen_system_hiv.py");
+    ensure_gen_hiv(cfg)?;
+    let gen_hiv = cfg.neodos_root.join("tools").join("gen-hiv").join("target").join("release").join("gen-hiv");
     let output = cfg.neodos_root.join("scripts").join("system.hiv");
 
-    let status = Command::new("python3")
-        .arg(&gen_script).arg(&output)
-        .status().context("Failed to run gen_system_hiv.py")?;
+    let status = Command::new(&gen_hiv)
+        .arg(&output)
+        .status().context("Failed to run gen-hiv")?;
 
     if !status.success() { anyhow::bail!("Registry hive generation failed"); }
     println!("{} SYSTEM.HIV: {}", "[✓]".bold().green(), output.display());
@@ -447,17 +464,18 @@ pub fn generate_registry_hive(cfg: &Config) -> Result<()> {
 }
 
 pub fn generate_test_hive(cfg: &Config, enable_network_test: bool) -> Result<PathBuf> {
-    let gen_script = cfg.neodos_root.join("scripts").join("gen_system_hiv.py");
+    ensure_gen_hiv(cfg)?;
+    let gen_hiv = cfg.neodos_root.join("tools").join("gen-hiv").join("target").join("release").join("gen-hiv");
     let orig = cfg.neodos_root.join("scripts").join("system.hiv");
     let backup = cfg.neodos_root.join("scripts").join("system.hiv.bak");
 
     if orig.exists() { std::fs::copy(&orig, &backup)?; }
 
-    let mut cmd = Command::new("python3");
-    cmd.arg(&gen_script).arg(&orig).arg("--enable-tests");
+    let mut cmd = Command::new(&gen_hiv);
+    cmd.arg(&orig).arg("--enable-tests");
     if enable_network_test { cmd.arg("--enable-network-test"); }
 
-    let status = cmd.status().context("Failed to run gen_system_hiv.py")?;
+    let status = cmd.status().context("Failed to run gen-hiv for test hive")?;
     if !status.success() { anyhow::bail!("Test registry hive generation failed"); }
     println!("{} Test SYSTEM.HIV: {} {}", "[✓]".bold().green(), orig.display(),
         if enable_network_test { "(with network test enabled)" } else { "" });
