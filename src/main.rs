@@ -359,7 +359,7 @@ fn cmd_image(
     }
 
     image::generate_registry_hive(cfg)?;
-    let fs_image = cfg.neodos_root.join("scripts").join("neodos_image.img");
+    let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
     image::build_ne2_image(cfg, disc, &fs_image, label, blocks)?;
     let esp_image = image::create_esp_image(cfg)?;
     image::create_gpt_image(cfg, &esp_image, &fs_image, output)?;

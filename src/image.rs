@@ -242,7 +242,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
     files.push(FileEntry { name: "/README.TXT".into(), content: b"Welcome to NeoDOS v2!\r\n".to_vec(), mode: MODE_FILE | PERM_R | PERM_W, is_dir: false });
     files.push(FileEntry { name: "/Temp/.empty".into(), content: vec![], mode: MODE_FILE | PERM_R | PERM_W, is_dir: false });
 
-    let hiv_path = root.join("scripts").join("system.hiv");
+    let hiv_path = root.join("data").join("system.hiv");
     if hiv_path.exists() {
         let content = std::fs::read(&hiv_path)?;
         files.push(FileEntry { name: "/System/Registry/SYSTEM.hiv".into(), content, mode: MODE_FILE | PERM_R, is_dir: false });
@@ -359,7 +359,7 @@ pub fn create_esp_image(cfg: &Config) -> Result<std::path::PathBuf> {
                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
         }
 
-        let fs_image = cfg.neodos_root.join("scripts").join("neodos_image.img");
+        let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
         if fs_image.exists() {
             let _ = Command::new("mcopy").args(["-i", &esp_image.to_string_lossy(), &fs_image.to_string_lossy(), "::/EFI/NeoDOS/neodos.fs"])
                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
@@ -452,7 +452,7 @@ pub fn generate_registry_hive(cfg: &Config) -> Result<()> {
     println!("{} Generating SYSTEM.HIV registry hive...", "[*]".bold().cyan());
     ensure_gen_hiv(cfg)?;
     let gen_hiv = cfg.neodos_root.join("tools").join("gen-hiv").join("target").join("release").join("gen-hiv");
-    let output = cfg.neodos_root.join("scripts").join("system.hiv");
+    let output = cfg.neodos_root.join("data").join("system.hiv");
 
     let status = Command::new(&gen_hiv)
         .arg(&output)
@@ -466,8 +466,8 @@ pub fn generate_registry_hive(cfg: &Config) -> Result<()> {
 pub fn generate_test_hive(cfg: &Config, enable_network_test: bool) -> Result<PathBuf> {
     ensure_gen_hiv(cfg)?;
     let gen_hiv = cfg.neodos_root.join("tools").join("gen-hiv").join("target").join("release").join("gen-hiv");
-    let orig = cfg.neodos_root.join("scripts").join("system.hiv");
-    let backup = cfg.neodos_root.join("scripts").join("system.hiv.bak");
+    let orig = cfg.neodos_root.join("data").join("system.hiv");
+    let backup = cfg.neodos_root.join("data").join("system.hiv.bak");
 
     if orig.exists() { std::fs::copy(&orig, &backup)?; }
 
@@ -483,8 +483,8 @@ pub fn generate_test_hive(cfg: &Config, enable_network_test: bool) -> Result<Pat
 }
 
 pub fn restore_hive(cfg: &Config) -> Result<()> {
-    let orig = cfg.neodos_root.join("scripts").join("system.hiv");
-    let backup = cfg.neodos_root.join("scripts").join("system.hiv.bak");
+    let orig = cfg.neodos_root.join("data").join("system.hiv");
+    let backup = cfg.neodos_root.join("data").join("system.hiv.bak");
     if backup.exists() {
         std::fs::copy(&backup, &orig)?;
         let _ = std::fs::remove_file(&backup);

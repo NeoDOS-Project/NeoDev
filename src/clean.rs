@@ -33,9 +33,9 @@ pub fn clean(cfg: &Config, disc: &Discovery, opts: &CleanOptions) -> Result<()> 
         remove_if_exists(&root.join("tmp_esp.img"));
         remove_if_exists(&root.join("disk_image.img"));
         remove_if_exists(&root.join("disk_image.vdi"));
-        remove_if_exists(&root.join("scripts/neodos_image.img"));
-        remove_if_exists(&root.join("scripts/neodos_image2.img"));
-        remove_if_exists(&root.join("scripts/system.hiv"));
+        remove_if_exists(&root.join("data/neodos_image.img"));
+        remove_if_exists(&root.join("data/neodos_image2.img"));
+        remove_if_exists(&root.join("data/system.hiv"));
     }
 
     if opts.should_clean(opts.nem) || opts.all {
