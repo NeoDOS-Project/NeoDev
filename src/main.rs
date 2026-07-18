@@ -1,3 +1,4 @@
+mod automation;
 mod build;
 mod check_deps;
 mod clean;
@@ -186,10 +187,69 @@ enum Commands {
     #[command(visible_alias = "deps")]
     CheckDeps,
 
+    /// Send commands to NeoDOS shell (automation)
+    #[command(visible_alias = "s")]
+    Shell {
+        #[command(subcommand)]
+        action: ShellAction,
+    },
+
     /// Manage NeoDOS virtual machines
     Vm {
         #[command(subcommand)]
         action: VmAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShellAction {
+    /// Send a single command to the shell
+    Send {
+        /// Command to send (e.g. "ipconfig")
+        command: String,
+        /// Do not press Enter after the command
+        #[arg(long)]
+        no_enter: bool,
+        /// Wait for shell prompt after sending (in seconds, 0 = no wait)
+        #[arg(long, default_value_t = 5)]
+        wait: u64,
+        /// Hypervisor backend
+        #[arg(long)]
+        backend: Option<String>,
+    },
+    /// Execute commands from a script file (one command per line)
+    Script {
+        /// Path to script file
+        script: std::path::PathBuf,
+        /// Wait for shell prompt between commands (in seconds)
+        #[arg(long, default_value_t = 5)]
+        wait: u64,
+        /// Timeout per command in seconds
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+        /// Hypervisor backend
+        #[arg(long)]
+        backend: Option<String>,
+    },
+    /// Wait for a pattern to appear in serial output
+    Wait {
+        /// Pattern to look for in serial output
+        pattern: String,
+        /// Timeout in seconds
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+        /// Serial output file path
+        #[arg(long)]
+        serial: Option<String>,
+    },
+    /// Wait for NeoDOS boot to complete
+    Boot {
+        /// Timeout in seconds
+        #[arg(long, default_value_t = 120)]
+        timeout: u64,
+        /// Serial output file path
+        #[arg(long)]
+        serial: Option<String>,
     },
 }
 
@@ -257,6 +317,7 @@ fn main() -> Result<()> {
         Commands::List => cmd_list(&cfg),
         Commands::Nxp { all, name } => cmd_nxp(&cfg, &disc, *all, name.as_deref()),
         Commands::CheckDeps => cmd_check_deps(&cfg),
+        Commands::Shell { action } => cmd_shell(&cfg, &disc, action),
         Commands::Vm { action } => cmd_vm(&cfg, action),
     }
 }
@@ -487,6 +548,139 @@ fn cmd_nxp(cfg: &config::Config, disc: &discovery::Discovery, all: bool, name: O
 fn cmd_check_deps(cfg: &config::Config) -> Result<()> {
     let kernel_src = cfg.neodos_root.join("neodos-kernel").join("src");
     check_deps::run_check_deps(&kernel_src)
+}
+
+fn cmd_shell(cfg: &config::Config, _disc: &discovery::Discovery, action: &ShellAction) -> Result<()> {
+    let resolve_backend = |cli: &Option<String>| -> String {
+        cli.clone().unwrap_or_else(|| cfg.vm_backend.clone())
+    };
+
+    let serial_path = std::path::PathBuf::from(
+        std::env::var("NEODOS_SERIAL_LOG")
+            .unwrap_or_else(|_| "/tmp/neodos_serial.log".into()),
+    );
+
+    match action {
+        ShellAction::Send { command, no_enter, wait, backend } => {
+            let actual_backend = resolve_backend(backend);
+            println!("{} Sending command to NeoDOS shell", "[*]".bold().cyan());
+            println!("  Backend: {}", actual_backend);
+            println!("  Command: {}", command);
+            println!("  Wait:    {}s", wait);
+
+            let auto_cfg = automation::AutomationConfig {
+                backend: actual_backend,
+                serial_path: Some(serial_path.clone()),
+                ..Default::default()
+            };
+            let auto = automation::create_automation(&auto_cfg)?;
+
+            if *no_enter {
+                auto.send_keys(command)?;
+            } else {
+                auto.send_command(command)?;
+            }
+
+            if *wait > 0 {
+                let mut monitor = automation::create_serial_monitor(&serial_path);
+                let found = automation::wait_for_prompt(
+                    &mut monitor,
+                    std::time::Duration::from_secs(*wait),
+                )?;
+                if found {
+                    println!("  {} Shell prompt detected", "[✓]".bold().green());
+                } else {
+                    println!("  {} Shell prompt not detected within {}s", "[!]".bold().yellow(), wait);
+                }
+            }
+            Ok(())
+        }
+        ShellAction::Script { script, wait, timeout, backend } => {
+            let actual_backend = resolve_backend(backend);
+            let content = std::fs::read_to_string(script)
+                .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", script.display(), e))?;
+
+            let commands: Vec<&str> = content.lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+
+            if commands.is_empty() {
+                anyhow::bail!("Script '{}' contains no commands", script.display());
+            }
+
+            println!("{} Executing script: {}", "[*]".bold().cyan(), script.display());
+            println!("  Backend: {}", actual_backend);
+            println!("  Commands: {}", commands.len());
+            println!("  Wait:    {}s between commands", wait);
+            println!("  Timeout: {}s per command", timeout);
+
+            let auto_cfg = automation::AutomationConfig {
+                backend: actual_backend,
+                serial_path: Some(serial_path.clone()),
+                ..Default::default()
+            };
+            let auto = automation::create_automation(&auto_cfg)?;
+            let mut monitor = automation::create_serial_monitor(&serial_path);
+
+            for (i, cmd) in commands.iter().enumerate() {
+                println!("  [{}/{}] Sending: {}", i + 1, commands.len(), cmd);
+                auto.send_command(cmd)?;
+
+                if *wait > 0 {
+                    let found = automation::wait_for_prompt(
+                        &mut monitor,
+                        std::time::Duration::from_secs(*wait),
+                    )?;
+                    if !found {
+                        println!("  {} Prompt not detected after '{}'", "[!]".bold().yellow(), cmd);
+                    }
+                }
+            }
+
+            println!("{} Script completed", "[✓]".bold().green());
+            Ok(())
+        }
+        ShellAction::Wait { pattern, timeout, serial } => {
+            let sp = serial
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| serial_path.clone());
+            println!("{} Waiting for pattern in serial output", "[*]".bold().cyan());
+            println!("  Pattern: {:?}", pattern);
+            println!("  Timeout: {}s", timeout);
+            println!("  Serial:  {}", sp.display());
+
+            let mut monitor = automation::create_serial_monitor(&sp);
+            let found = monitor.wait_for(pattern, std::time::Duration::from_secs(*timeout))?;
+
+            if found {
+                println!("{} Pattern detected", "[✓]".bold().green());
+            } else {
+                println!("{} Pattern not detected within {}s", "[!]".bold().yellow(), timeout);
+            }
+            Ok(())
+        }
+        ShellAction::Boot { timeout, serial } => {
+            let sp = serial
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| serial_path.clone());
+            println!("{} Waiting for NeoDOS boot to complete", "[*]".bold().cyan());
+            println!("  Timeout: {}s", timeout);
+            println!("  Serial:  {}", sp.display());
+
+            let mut monitor = automation::create_serial_monitor(&sp);
+            let found = monitor.wait_for_boot_complete(std::time::Duration::from_secs(*timeout))?;
+
+            if found {
+                println!("{} NeoDOS boot detected", "[✓]".bold().green());
+            } else {
+                println!("{} Boot not detected within {}s", "[!]".bold().yellow(), timeout);
+            }
+            Ok(())
+        }
+    }
 }
 
 fn cmd_vm(cfg: &config::Config, action: &VmAction) -> Result<()> {

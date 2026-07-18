@@ -57,7 +57,9 @@ impl HypervisorBackend for QemuBackend {
         println!("  QEMU accelerator: {}", accel);
         cmd.args(["-machine", &format!("q35,accel={}", accel)]);
         cmd.args(["-monitor", "telnet:127.0.0.1:4444,server,nowait"]);
+        cmd.args(["-monitor", "tcp:127.0.0.1:4445,server,nowait"]);
         println!("  QEMU Monitor: localhost:4444");
+        println!("  Automation:   localhost:4445");
 
         if vmcfg.gdb { cmd.args(["-gdb", &format!("tcp::{}", vmcfg.gdb_port)]); println!("  GDB:          localhost:{} (use 'gdb -x .gdbinit')", vmcfg.gdb_port); }
         if vmcfg.headless { cmd.args(["-display", "none"]); }
@@ -121,7 +123,10 @@ impl HypervisorBackend for QemuBackend {
     fn start_headless(&self, cfg: &Config, vmcfg: &VmConfig) -> Result<Box<dyn VmInstance>> {
         let mut cmd = Command::new("qemu-system-x86_64");
         let accel = if cfg.qemu_kvm && Path::new("/dev/kvm").exists() { "kvm" } else { "tcg" };
-        cmd.args(["-machine", &format!("q35,accel={}", accel), "-monitor", "telnet:127.0.0.1:4446,server,nowait", "-display", "none", "-no-reboot"]);
+        cmd.args(["-machine", &format!("q35,accel={}", accel)]);
+        cmd.args(["-monitor", "telnet:127.0.0.1:4446,server,nowait"]);
+        cmd.args(["-monitor", "tcp:127.0.0.1:4445,server,nowait"]);
+        cmd.args(["-display", "none", "-no-reboot"]);
 
         let ovmf_vars = format!("/tmp/OVMF_VARS_test_{}.fd", std::process::id());
         std::fs::copy(&cfg.ovmf_vars_template, &ovmf_vars)?;
