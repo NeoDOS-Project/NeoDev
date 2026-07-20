@@ -314,8 +314,10 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
     for nem_name in boot_drivers.iter().chain(sys_drivers) {
         let cat = if boot_drivers.contains(nem_name) { "BOOT" } else { "SYSTEM" };
         let p = Path::new(&nem_dir).join(cat).join(format!("{}.nem", nem_name));
-        if p.exists() {
-            let content = std::fs::read(&p)?;
+        let fallback = root.join("data").join("nem_bin").join(cat).join(format!("{}.nem", nem_name));
+        let path = if p.exists() { &p } else { &fallback };
+        if path.exists() {
+            let content = std::fs::read(path)?;
             files.push(FileEntry { name: format!("/System/Drivers/{}.nem", nem_name), content, mode: MODE_FILE | PERM_R, is_dir: false });
         }
     }

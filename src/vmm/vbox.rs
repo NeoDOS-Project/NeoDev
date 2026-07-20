@@ -209,8 +209,8 @@ fn detect_bridge_interface() -> String {
             if !is_up { continue; }
             let has_carrier = std::fs::read_to_string(format!("/sys/class/net/{}/carrier", iface)).map(|s| s.trim() == "1").unwrap_or(false);
             if !has_carrier { continue; }
-            let is_ethernet = std::fs::read_to_string(format!("/sys/class/net/{}/uevent", iface)).map(|s| s.contains("DEVTYPE=wlan") || s.contains("DEVTYPE=wifi")).unwrap_or(true);
-            let is_ethernet = !is_ethernet;
+            let is_wireless = std::fs::read_to_string(format!("/sys/class/net/{}/uevent", iface)).map(|s| s.contains("DEVTYPE=wlan") || s.contains("DEVTYPE=wifi")).unwrap_or(false);
+            let is_ethernet = !is_wireless;
             let has_ip = has_ip_address(&iface);
             if is_ethernet { if has_ip { ethernet_candidates.push(iface.clone()); } if fallback.is_none() { fallback = Some(iface.clone()); } }
             else { wifi_candidates.push(iface.clone()); }
@@ -224,4 +224,53 @@ fn detect_bridge_interface() -> String {
 
 fn has_ip_address(iface: &str) -> bool {
     Command::new("ip").args(["-4", "addr", "show", "dev", iface]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("inet ")).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_bridge_interface_not_empty() {
+        let iface = detect_bridge_interface();
+        assert!(!iface.is_empty(), "interface name should not be empty");
+        assert!(!iface.contains(' '), "interface name should not contain spaces");
+        assert_ne!(iface, "lo", "should not return loopback");
+    }
+
+    #[test]
+    fn test_detect_returns_real_ethernet() {
+        let output = Command::new("ip").args(["-o", "link", "show"]).output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let active_eth: Vec<String> = stdout.lines().filter_map(|line| {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() < 2 { return None; }
+            let iface = parts[1].trim().to_string();
+            if iface == "lo" { return None; }
+            let up = std::fs::read_to_string(format!("/sys/class/net/{}/operstate", iface)).map(|s| s.trim() == "up").unwrap_or(false);
+            let car = std::fs::read_to_string(format!("/sys/class/net/{}/carrier", iface)).map(|s| s.trim() == "1").unwrap_or(false);
+            if up && car { Some(iface) } else { None }
+        }).collect();
+
+        if !active_eth.is_empty() {
+            let selected = detect_bridge_interface();
+            assert!(!selected.is_empty());
+            assert_ne!(selected, "eth0", "should detect real interface, not fallback");
+        }
+    }
+
+    #[test]
+    fn test_has_ip_works() {
+        let output = Command::new("ip").args(["-o", "link", "show"]).output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() < 2 { continue; }
+            let iface = parts[1].trim().to_string();
+            if iface == "lo" { continue; }
+            let has_ip = has_ip_address(&iface);
+            let check = Command::new("ip").args(["-4", "addr", "show", "dev", &iface]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("inet ")).unwrap_or(false);
+            assert_eq!(has_ip, check, "has_ip mismatch for {}", iface);
+        }
+    }
 }
