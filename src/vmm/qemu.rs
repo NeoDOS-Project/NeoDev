@@ -97,6 +97,14 @@ impl HypervisorBackend for QemuBackend {
 
         cmd.args(["-m", &format!("{}M", vmcfg.memory_mb)]);
 
+        // ── DIAGNOSTIC: capture CPU exceptions and reset events ──
+        // -d int         : log all CPU exceptions to stderr
+        // -d cpu_reset   : log CPU reset events
+        // -no-reboot     : do NOT reboot on triple fault — halt instead
+        //                  (allows serial log to capture the last exception)
+        cmd.args(["-d", "int,cpu_reset"]);
+        cmd.args(["-no-reboot"]);
+
         if let Some(ref serial_file) = vmcfg.serial_file { cmd.args(["-serial", &format!("file:{}", serial_file.display())]); }
         else { cmd.arg("-serial").arg("stdio"); }
 
@@ -142,6 +150,9 @@ impl HypervisorBackend for QemuBackend {
 
         cmd.args(["-netdev", "user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.80,host=10.0.1.1", "-device", "e1000,netdev=net0",
                   "-m", &format!("{}M", vmcfg.memory_mb)]);
+        // ── DIAGNOSTIC: capture CPU exceptions and reset events ──
+        cmd.args(["-d", "int,cpu_reset"]);
+        cmd.args(["-no-reboot"]);
         if let Some(ref serial_file) = vmcfg.serial_file { cmd.args(["-serial", &format!("file:{}", serial_file.display())]); }
 
         let child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn().context("Failed to start QEMU")?;
