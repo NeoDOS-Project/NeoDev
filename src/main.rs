@@ -485,7 +485,11 @@ fn cmd_test(
         backend: actual_backend.to_string(),
     };
 
-    test_::run_tests(cfg, &opts).map(|_| ())
+    let result = test_::run_tests(cfg, &opts)?;
+    if !result.kernel_tests_passed {
+        anyhow::bail!("Kernel tests failed");
+    }
+    Ok(())
 }
 
 fn cmd_dhcp(

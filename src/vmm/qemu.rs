@@ -155,7 +155,10 @@ impl HypervisorBackend for QemuBackend {
         cmd.args(["-no-reboot"]);
         if let Some(ref serial_file) = vmcfg.serial_file { cmd.args(["-serial", &format!("file:{}", serial_file.display())]); }
 
-        let child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn().context("Failed to start QEMU")?;
+        let stderr_path = format!("/tmp/neodos-qemu-{}.stderr.log", std::process::id());
+        let stderr_file = std::fs::File::create(&stderr_path)
+            .context("Failed to create QEMU test stderr log")?;
+        let child = cmd.stdout(Stdio::null()).stderr(Stdio::from(stderr_file)).spawn().context("Failed to start QEMU")?;
         Ok(Box::new(QemuInstance { child, serial_file: vmcfg.serial_file.clone() }))
     }
 

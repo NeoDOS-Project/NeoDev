@@ -20,6 +20,8 @@ pub struct TestOptions {
 pub struct TestResult {
     pub kernel_tests_passed: bool,
     pub kernel_count: Option<u32>,
+    pub kernel_failed_count: Option<u32>,
+    pub kernel_failed_tests: Vec<String>,
     pub command_tests_passed: bool,
     pub shell_tests_passed: bool,
     pub total_duration: Duration,
@@ -88,7 +90,7 @@ fn wait_for_test_completion(instance: &mut Box<dyn vmm::VmInstance>, timeout_sec
     let mut last_serial_len = 0u64;
     while Instant::now() < deadline {
         if let Some(exit_code) = instance.wait_timeout(Duration::from_millis(100))? {
-            return Ok(TestResult { kernel_tests_passed: false, kernel_count: None, command_tests_passed: false, shell_tests_passed: false, total_duration: Duration::ZERO, panics: vec![format!("VM exited early: code {}", exit_code)] });
+            return Ok(TestResult { kernel_tests_passed: false, kernel_count: None, kernel_failed_count: None, kernel_failed_tests: vec![], command_tests_passed: false, shell_tests_passed: false, total_duration: Duration::ZERO, panics: vec![format!("VM exited early: code {}", exit_code)] });
         }
         if let Ok(new_data) = read_serial_since(last_serial_len) {
             last_serial_len += new_data.len() as u64;
@@ -98,7 +100,7 @@ fn wait_for_test_completion(instance: &mut Box<dyn vmm::VmInstance>, timeout_sec
             }
         }
         let full_text = output_lines.join("\n");
-        if full_text.contains("ALL_TESTS_COMPLETE") && full_text.contains("CMDTEST_COMPLETE") && full_text.contains("STRESSCMD_COMPLETE") { break; }
+        if full_text.contains("ALL_TESTS_COMPLETE") { break; }
         std::thread::sleep(Duration::from_millis(300));
     }
     analyze_results(&output_lines)
@@ -124,13 +126,29 @@ fn print_serial_line(line: &str, _state: &str) {
 
 fn analyze_results(lines: &[String]) -> Result<TestResult> {
     let full_text = lines.join("\n");
-    let kernel_ok = full_text.contains("kernel tests passed");
-    let kernel_count = full_text.lines().find_map(|l| {
-        if l.contains("kernel tests passed") {
-            let parts: Vec<&str> = l.split_whitespace().collect();
-            parts.get(1).and_then(|s| s.parse::<u32>().ok())
-        } else { None }
-    });
+    let mut kernel_count = None;
+    let mut kernel_failed_count = None;
+    let mut kernel_failed_tests = Vec::new();
+    for line in lines {
+        let clean = strip_ansi(line).trim().to_string();
+        if let Some(rest) = clean.strip_prefix("All ") {
+            if let Some(passed) = rest.strip_suffix(" kernel tests passed.") {
+                kernel_count = passed.parse::<u32>().ok();
+                kernel_failed_count = Some(0);
+            }
+        } else if let Some(rest) = clean.strip_suffix(" failed.") {
+            if let Some((passed, failed)) = rest.split_once(" kernel tests passed, ") {
+                kernel_count = passed.parse::<u32>().ok();
+                kernel_failed_count = failed.parse::<u32>().ok();
+            }
+        }
+        if let Some(test) = clean.strip_prefix("TEST ") {
+            if let Some((name, _)) = test.split_once(" ... FAIL:") {
+                kernel_failed_tests.push(name.to_string());
+            }
+        }
+    }
+    let kernel_ok = kernel_failed_count == Some(0);
     let cmd_ok = full_text.contains("ALL_COMMAND_TESTS_PASSED");
     let sh_ok = full_text.contains("SHELL_TESTS_PASSED");
     let mut panics = vec![];
@@ -140,7 +158,7 @@ fn analyze_results(lines: &[String]) -> Result<TestResult> {
             if clean.contains(kw) { panics.push(clean.clone()); }
         }
     }
-    Ok(TestResult { kernel_tests_passed: kernel_ok, kernel_count, command_tests_passed: cmd_ok, shell_tests_passed: sh_ok, total_duration: Duration::ZERO, panics })
+    Ok(TestResult { kernel_tests_passed: kernel_ok, kernel_count, kernel_failed_count, kernel_failed_tests, command_tests_passed: cmd_ok, shell_tests_passed: sh_ok, total_duration: Duration::ZERO, panics })
 }
 
 fn print_test_result(result: &TestResult, elapsed: Duration) {
@@ -150,7 +168,14 @@ fn print_test_result(result: &TestResult, elapsed: Duration) {
     if result.kernel_tests_passed {
         if let Some(count) = result.kernel_count { println!("  {} Kernel tests: {} passed", "[PASS]".bold().green(), count); }
         else { println!("  {} Kernel tests passed", "[PASS]".bold().green()); }
-    } else { println!("  {} Kernel tests FAILED", "[FAIL]".bold().red()); }
+    } else {
+        if let (Some(passed), Some(failed)) = (result.kernel_count, result.kernel_failed_count) {
+            println!("  {} Kernel tests: {} passed, {} failed", "[FAIL]".bold().red(), passed, failed);
+        } else {
+            println!("  {} Kernel tests FAILED", "[FAIL]".bold().red());
+        }
+        for test in &result.kernel_failed_tests { println!("    FAIL: {}", test); }
+    }
     if result.command_tests_passed { println!("  {} Command tests passed", "[PASS]".bold().green()); }
     else { println!("  {} Command tests FAILED or not run", "[INFO]".bold().yellow()); }
     if result.shell_tests_passed { println!("  {} Shell tests passed", "[PASS]".bold().green()); }
@@ -160,9 +185,40 @@ fn print_test_result(result: &TestResult, elapsed: Duration) {
         for p in &result.panics { println!("    {}", p); }
     }
     println!();
-    if result.kernel_tests_passed { println!("{} OVERALL: SUCCESS", "[✓]".bold().green()); }
+    if result.kernel_tests_passed { println!("{} OVERALL: PASSED", "[✓]".bold().green()); }
     else { println!("{} OVERALL: FAILED", "[✗]".bold().red()); }
     println!("  Duration: {:.1}s", elapsed.as_secs_f64());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_results;
+
+    #[test]
+    fn parses_all_passed_summary() {
+        let result = analyze_results(&["All 685 kernel tests passed.".into()]).unwrap();
+        assert!(result.kernel_tests_passed);
+        assert_eq!(result.kernel_count, Some(685));
+        assert_eq!(result.kernel_failed_count, Some(0));
+    }
+
+    #[test]
+    fn parses_real_failures_and_names() {
+        let result = analyze_results(&[
+            "TEST rq_one ... FAIL: assertion failed".into(),
+            "2 kernel tests passed, 1 failed.".into(),
+        ]).unwrap();
+        assert!(!result.kernel_tests_passed);
+        assert_eq!(result.kernel_failed_count, Some(1));
+        assert_eq!(result.kernel_failed_tests, vec!["rq_one"]);
+    }
+
+    #[test]
+    fn ignores_fail_text_without_kernel_summary() {
+        let result = analyze_results(&["expected message: FAIL is not a test result".into()]).unwrap();
+        assert!(!result.kernel_tests_passed);
+        assert!(result.kernel_failed_tests.is_empty());
+    }
 }
 
 // DHCP Integration Test
