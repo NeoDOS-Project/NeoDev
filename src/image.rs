@@ -66,23 +66,75 @@ fn make_direntry(name: &str, mode: u16, size: u64, extent_lba: u64, extent_count
     buf
 }
 
-fn make_btree_leaf(entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+/// Serialize a NE2 directory leaf.
+///
+/// Layout: `[u16 type=1][u16 count][u32 crc][ (u16 key_len)(key)(u16 val_len)(value) ... ]`
+/// Payload available for entries is `BLOCK_SIZE - LEAF_HEADER`.
+///
+/// Fail-fast invariant: the declared `count` must always equal the number of
+/// entries actually serialized.  If the caller passes more entries than fit in a
+/// single leaf, this returns an error instead of writing a partial leaf (which
+/// would corrupt directory lookups).  Multi-block directory leaves are
+/// intentionally not implemented here — callers must rebalance directories.
+fn make_btree_leaf(dirpath: &str, entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
+    const LEAF_HEADER: usize = 8; // u16 type + u16 count + u32 crc
+    let available = BLOCK_SIZE - LEAF_HEADER;
     let mut data = vec![0u8; BLOCK_SIZE];
+    let mut off = LEAF_HEADER;
+    let mut serialized = 0usize;
+    let mut required = 0usize;
+    let mut overflowed = false;
+    for (key, value) in entries {
+        let entry_size = 4 + key.len() + value.len();
+        required += entry_size;
+        // Once an entry no longer fits, stop serializing so the leaf remains a
+        // sorted prefix; keep counting `required` for the diagnostic.
+        if !overflowed && off + entry_size <= BLOCK_SIZE {
+            put_u16_le(&mut data, off, key.len() as u16); off += 2;
+            data[off..off + key.len()].copy_from_slice(key); off += key.len();
+            put_u16_le(&mut data, off, value.len() as u16); off += 2;
+            data[off..off + value.len()].copy_from_slice(value); off += value.len();
+            serialized += 1;
+        } else {
+            overflowed = true;
+        }
+    }
+    if overflowed || serialized != entries.len() {
+        anyhow::bail!(
+            "NE2 directory leaf overflow in '{}': {} entries requested, only {} fit \
+             in a single {} byte leaf ({} bytes available for entries, {} bytes required). \
+             Rebalance this directory (multi-block directory support is not implemented).",
+            dirpath,
+            entries.len(),
+            serialized,
+            BLOCK_SIZE,
+            available,
+            required
+        );
+    }
     put_u16_le(&mut data, 0, 1);
     put_u16_le(&mut data, 2, entries.len() as u16);
-    let mut off = 8;
-    for (key, value) in entries {
-        let kl = key.len() as u16;
-        let vl = value.len() as u16;
-        if off + 4 + kl as usize + vl as usize > BLOCK_SIZE { break; }
-        put_u16_le(&mut data, off, kl); off += 2;
-        data[off..off + kl as usize].copy_from_slice(key); off += kl as usize;
-        put_u16_le(&mut data, off, vl); off += 2;
-        data[off..off + vl as usize].copy_from_slice(value); off += vl as usize;
-    }
     let cksum = crc32(&data[8..]);
     put_u32_le(&mut data, 4, cksum);
-    data
+    Ok(data)
+}
+
+/// Flush a bucket of locale NLTs into `/System/Locale/<dir>/`.
+fn push_locale_bucket(
+    files: &mut Vec<FileEntry>,
+    loc_dirs: &[String],
+    idx: usize,
+    bucket: &mut Vec<(String, Vec<u8>)>,
+) {
+    let dir = &loc_dirs[idx];
+    for (fname, content) in bucket.drain(..) {
+        files.push(FileEntry {
+            name: format!("/System/Locale/{}/{}", dir, fname),
+            content,
+            mode: MODE_FILE | PERM_R,
+            is_dir: false,
+        });
+    }
 }
 
 fn put_u16_le(buf: &mut [u8], off: usize, val: u16) {
@@ -197,7 +249,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
 
     for (dirpath, node_entries) in &dir_nodes {
         if let Some(&lba) = dir_lba_map.get(dirpath) {
-            let node_data = make_btree_leaf(node_entries);
+            let node_data = make_btree_leaf(dirpath, node_entries)?;
             let offset = (lba as usize) * BLOCK_SIZE;
             if offset + BLOCK_SIZE <= image.len() { image[offset..offset + BLOCK_SIZE].copy_from_slice(&node_data); }
         }
@@ -248,17 +300,24 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         files.push(FileEntry { name: "/System/Registry/SYSTEM.hiv".into(), content, mode: MODE_FILE | PERM_R, is_dir: false });
     }
 
+    // A single NE2 directory leaf holds ~28 entries (4096 B block, 8 B header,
+    // then 4 + len(name) + 128 B per entry).  Keep each group under that
+    // capacity: `build_ne2_image` fails fast on a leaf overflow instead of
+    // silently truncating entries.
     let programs_nxe = &[
-        "neoshell", "neoinit", "cmdtest", "shtest", "stresscmd", "cd", "corehelp",
-        "datetime", "ver", "neomem", "vol", "echo", "label",
-        "coretype", "tree", "corecls", "corecopy", "coredel",
+        "neoshell", "neoinit", "cmdtest", "cd", "corehelp",
+        "datetime", "neomem", "echo", "label",
+        "coretype", "corecls", "corecopy", "coredel",
         "coreren", "coremd", "corerd", "drives", "ps", "keyb", "coredir",
-        "poweroff", "reboot", "colors", "neokey",
+        "poweroff", "colors", "neokey",
         "nxres", "nxlocale", "nxverify", "ping", "hostname",
     ];
     let tools_nxe = &[
         "kill", "pri", "fsck", "ndreg", "loadnem", "progress",
         "neotop", "dhcpd", "netcfg", "ipconfig", "cpuinfo", "neolocale", "dhcptest",
+        // Moved out of /Programs to keep its single leaf within capacity.
+        // The shell PATH includes System/Tools, so they stay discoverable.
+        "reboot", "shtest", "stresscmd", "tree", "ver", "vol",
     ];
 
     for name in programs_nxe.iter().chain(tools_nxe) {
@@ -295,15 +354,53 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
                 let lang_path = lang_entry.path();
                 if !lang_path.is_dir() { continue; }
                 let lang_name = match lang_path.file_name().and_then(|n| n.to_str()) { Some(n) => n, None => continue };
+
+                // Collect this language's NLTs (sorted) so a leaf overflow is
+                // deterministic and rebalanceable.
+                let mut nlts: Vec<(String, Vec<u8>)> = Vec::new();
                 if let Ok(nlt_entries) = std::fs::read_dir(&lang_path) {
                     for nlt_entry in nlt_entries.flatten() {
                         let p = nlt_entry.path();
                         if p.extension().and_then(|e| e.to_str()) != Some("nlt") { continue; }
                         let content = match std::fs::read(&p) { Ok(c) => c, Err(_) => continue };
-                        let fname = match p.file_name().and_then(|n| n.to_str()) { Some(n) => n, None => continue };
-                        files.push(FileEntry { name: format!("/System/Locale/{}/{}", lang_name, fname), content, mode: MODE_FILE | PERM_R, is_dir: false });
+                        let fname = match p.file_name().and_then(|n| n.to_str()) { Some(n) => n.to_string(), None => continue };
+                        nlts.push((fname, content));
                     }
                 }
+                nlts.sort_by(|a, b| a.0.cmp(&b.0));
+
+                // A single NE2 leaf holds ~28 NLTs, but a language has ~47.  The
+                // i18n loader already consults `{lang}`, then `{lang-only}`, then
+                // `en-US`, so distribute the sorted NLTs across the two dirs that
+                // language resolves against.  No format or i18n change required,
+                // and no NLT is dropped.
+                let mut loc_dirs: Vec<String> = vec![lang_name.to_string()];
+                if let Some(dash) = lang_name.find('-') {
+                    loc_dirs.push(lang_name[..dash].to_string());
+                }
+
+                let mut bucket: Vec<(String, Vec<u8>)> = Vec::new();
+                let mut bucket_bytes = 8usize; // leaf header
+                let mut dir_idx = 0usize;
+                for (fname, content) in nlts {
+                    let entry_size = 4 + fname.len() + DIRENTRY_SIZE;
+                    if bucket_bytes + entry_size > BLOCK_SIZE {
+                        push_locale_bucket(&mut files, &loc_dirs, dir_idx, &mut bucket);
+                        dir_idx += 1;
+                        if dir_idx >= loc_dirs.len() {
+                            anyhow::bail!(
+                                "NE2 locale '{}' needs more than {} leaves ({} NLTs). \
+                                 Multi-block directory support is not implemented.",
+                                lang_name, loc_dirs.len(),
+                                std::fs::read_dir(&lang_path).map(|d| d.count()).unwrap_or(0)
+                            );
+                        }
+                        bucket_bytes = 8;
+                    }
+                    bucket_bytes += entry_size;
+                    bucket.push((fname, content));
+                }
+                push_locale_bucket(&mut files, &loc_dirs, dir_idx, &mut bucket);
             }
         }
     }
@@ -512,4 +609,78 @@ fn fmt_size(size: u64) -> String {
         s /= 1024.0;
     }
     format!("{:.2} GB", s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LEAF_HEADER: usize = 8; // u16 type + u16 count + u32 crc
+
+    fn entry(key: &str) -> (Vec<u8>, Vec<u8>) {
+        (key.as_bytes().to_vec(), vec![0u8; DIRENTRY_SIZE])
+    }
+
+    /// Walk the serialized entries of a leaf and return their keys.
+    /// Panics if any field runs past the block boundary.
+    fn parse_leaf_keys(leaf: &[u8]) -> Vec<Vec<u8>> {
+        let count = u16::from_le_bytes([leaf[2], leaf[3]]) as usize;
+        let mut off = LEAF_HEADER;
+        let mut keys = Vec::new();
+        for _ in 0..count {
+            assert!(off + 2 <= BLOCK_SIZE, "key_len out of bounds");
+            let kl = u16::from_le_bytes([leaf[off], leaf[off + 1]]) as usize;
+            off += 2;
+            assert!(off + kl <= BLOCK_SIZE, "key out of bounds");
+            let key = leaf[off..off + kl].to_vec();
+            off += kl;
+            assert!(off + 2 <= BLOCK_SIZE, "val_len out of bounds");
+            let vl = u16::from_le_bytes([leaf[off], leaf[off + 1]]) as usize;
+            off += 2;
+            assert!(off + vl <= BLOCK_SIZE, "value out of bounds");
+            off += vl;
+            keys.push(key);
+        }
+        keys
+    }
+
+    #[test]
+    fn leaf_exactly_at_capacity_declares_serialized_count() {
+        // Fixed 8-byte keys + 128-byte values => 140 bytes per entry.
+        let per_entry = 4 + 8 + DIRENTRY_SIZE;
+        let capacity = (BLOCK_SIZE - LEAF_HEADER) / per_entry;
+        let entries: Vec<_> = (0..capacity)
+            .map(|i| entry(&format!("n{:07}", i)))
+            .collect();
+        let leaf = make_btree_leaf("/Programs", &entries).expect("leaf at capacity must fit");
+        let declared = u16::from_le_bytes([leaf[2], leaf[3]]) as usize;
+        assert_eq!(declared, capacity);
+        assert_eq!(parse_leaf_keys(&leaf).len(), capacity);
+    }
+
+    #[test]
+    fn leaf_over_capacity_fails_explicitly() {
+        let per_entry = 4 + 8 + DIRENTRY_SIZE;
+        let capacity = (BLOCK_SIZE - LEAF_HEADER) / per_entry;
+        let entries: Vec<_> = (0..capacity + 1)
+            .map(|i| entry(&format!("n{:07}", i)))
+            .collect();
+        let err = make_btree_leaf("/Programs", &entries).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("/Programs"), "error should name the directory: {msg}");
+        assert!(msg.contains("overflow"), "error should mention overflow: {msg}");
+    }
+
+    #[test]
+    fn leaf_never_declares_more_than_serialized() {
+        // Mixed key sizes: every accepted leaf must be internally consistent.
+        let entries: Vec<_> = (0..25)
+            .map(|i| entry(&format!("file{:02}.nxe", i)))
+            .collect();
+        let leaf = make_btree_leaf("/Mixed", &entries).expect("25 small entries fit");
+        let declared = u16::from_le_bytes([leaf[2], leaf[3]]) as usize;
+        let parsed = parse_leaf_keys(&leaf);
+        assert_eq!(declared, parsed.len());
+        assert_eq!(declared, entries.len());
+    }
 }
