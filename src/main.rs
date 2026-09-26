@@ -393,7 +393,7 @@ fn cmd_build(
 
     if image && kernel_ok && bl_ok {
         cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                  cfg.esp_size_mb, cfg.neodos_size_mb, 2560, "NEODOS", true)?;
+                  cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true)?;
     }
     Ok(())
 }
