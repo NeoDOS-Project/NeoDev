@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2.1 (2026-09-26)
+
+### Fixed
+
+- **NE2 directory leaf overflow**: `make_btree_leaf()` could declare more entries
+  than it serialized when a directory exceeded a single leaf, producing a
+  structurally inconsistent leaf and silently dropping entries.
+  - `/Programs` (34 entries) overflowed the ~28-entry capacity: `reboot`,
+    `shtest`, `stresscmd`, `tree`, `ver`, `vol` were lost, and `ping`/`ps`
+    lookups failed.
+  - `make_btree_leaf()` now fails fast with a diagnostic (directory, requested
+    count, capacity) instead of truncating.
+  - Rebalanced `programs_nxe`/`tools_nxe` so every generated leaf fits
+    (all programs remain present; `System/Tools` is on the shell PATH).
+  - Added regression tests: leaf at capacity succeeds; over-capacity fails
+    explicitly; declared count always equals serialized count.
+- **Explicit-flag build used a 10 MB image**: `build --kernel/--userbin/...`
+  passed a hardcoded `2560` NE2 blocks instead of the configured
+  `--neodos-blocks` (default 25600 = 100 MB).  This produced a too-small image
+  that could panic the kernel at boot.  Now it uses `neodos_blocks`, matching
+  the `--all` and `--quick` paths.
+- **QEMU ignored the configured CPU count**: `run` and `start_headless` never
+  passed `-smp`, so `neodev run`/`neodev test` always booted a single vCPU
+  regardless of `[vm] cpus`.  This forced `netd` onto the BSP and starved
+  userland.  Both paths now honor `vmcfg.cpus`.
+
 ## v0.2.0 (2025-07-17)
 
 ### Major
