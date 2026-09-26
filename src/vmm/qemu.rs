@@ -56,6 +56,8 @@ impl HypervisorBackend for QemuBackend {
         };
         println!("  QEMU accelerator: {}", accel);
         cmd.args(["-machine", &format!("q35,accel={}", accel)]);
+        cmd.args(["-smp", &vmcfg.cpus.to_string()]);
+        println!("  QEMU CPUs:    {}", vmcfg.cpus);
         cmd.args(["-monitor", "telnet:127.0.0.1:4444,server,nowait"]);
         cmd.args(["-monitor", "tcp:127.0.0.1:4445,server,nowait"]);
         println!("  QEMU Monitor: localhost:4444");
@@ -132,6 +134,7 @@ impl HypervisorBackend for QemuBackend {
         let mut cmd = Command::new("qemu-system-x86_64");
         let accel = if cfg.qemu_kvm && Path::new("/dev/kvm").exists() { "kvm" } else { "tcg" };
         cmd.args(["-machine", &format!("q35,accel={}", accel)]);
+        cmd.args(["-smp", &vmcfg.cpus.to_string()]);
         cmd.args(["-monitor", "telnet:127.0.0.1:4446,server,nowait"]);
         cmd.args(["-monitor", "tcp:127.0.0.1:4445,server,nowait"]);
         cmd.args(["-display", "none", "-no-reboot"]);
