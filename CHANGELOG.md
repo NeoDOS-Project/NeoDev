@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.3.0 (2026-09-27)
+
+### Fixed
+
+- **VirtualBox stale VDI (issue #1)**: `neodev test --backend virtualbox`
+  never refreshed `disk_image.vdi`, so it could boot the previous kernel even
+  after `neodev build --quick --image` produced a newer `disk_image.img`.
+  - New single authoritative path `vbox::ensure_vdi_current()` owns the
+    `raw image -> VDI` freshness policy and is now called by both
+    `ensure_vm()` (`run`) and `start_headless()` (`test`, `dhcp`).
+  - Deterministic rule: regenerate when the VDI is missing or when
+    `mtime(img) > mtime(vdi)`; equal timestamps mean current (no sleep/fudge
+    factor).
+  - The medium is detached before replacement and re-attached afterwards, so an
+    attached VDI is never blindly deleted or overwritten. VM name, firmware,
+    chipset, AHCI controller, port/device, MAC and network config are preserved.
+  - A running/paused VM is never modified; regeneration fails with a clear
+    error instead. Missing `disk_image.img` and `VBoxManage convertfromraw`
+    failures return actionable errors (source, destination, exit status,
+    output) instead of silently booting a stale VDI.
+  - Post-conversion verification: the VDI must exist and be at least as new as
+    the raw image.
+  - Regression tests cover missing VDI, newer/equal/stale VDI, missing IMG,
+    conversion failure and paths containing spaces.
+
+### Changed
+
+- Removed every compiler and Clippy warning across the crate: simplified
+  iterator/`map_or`/sort patterns, used `div_ceil`, removed dead struct fields
+  and unused parameters, and moved the test module to the end of its file.
+- Bumped to `0.3.0`.
+
+### Added
+
+- `scripts/` tooling for VirtualBox validation (reused from local harnesses):
+  `vbox-vdi-sync-check.sh` and `vbox-boot-probe.py`.
+
 ## v0.2.1 (2026-09-26)
 
 ### Fixed

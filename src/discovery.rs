@@ -84,7 +84,7 @@ fn find_user_bins(root: &Path) -> Vec<Project> {
         if entry.file_name() == "Cargo.toml" {
             if let Some(parent) = entry.path().parent() {
                 let name = parent.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if !name.is_empty() && parent != &userbin_dir {
+                if !name.is_empty() && parent != userbin_dir.as_path() {
                     bins.push(Project {
                         name,
                         kind: ProjectKind::UserBin,

@@ -8,6 +8,9 @@ use std::sync::Arc;
 pub struct LoadedPlugin {
     pub backend: &'static NeodevBackendV1,
     _library: Arc<Library>,
+    /// On-disk location the plugin was loaded from (kept for diagnostics and
+    /// future reload support).
+    #[allow(dead_code)]
     pub path: PathBuf,
 }
 
@@ -22,7 +25,7 @@ fn find_plugin_libraries(plugin_dir: &Path) -> Vec<PathBuf> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let is_plugin = path.extension().and_then(|e| e.to_str()).map_or(false, |ext| {
+        let is_plugin = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
             matches!(ext, "so" | "dylib" | "dll")
         });
         if is_plugin && path.is_file() {

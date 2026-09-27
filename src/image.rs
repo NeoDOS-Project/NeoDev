@@ -185,7 +185,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
             let dir_path = format!("/{}", parts[..i].join("/"));
             let dir_parent = if i > 1 { format!("/{}", parts[..i - 1].join("/")) } else { root_marker.to_string() };
             let dir_name = parts[i - 1].to_string();
-            let already = dir_tree.get(&dir_parent).map_or(false, |entries| entries.iter().any(|e| e.name == dir_name && e.is_dir));
+            let already = dir_tree.get(&dir_parent).is_some_and(|entries| entries.iter().any(|e| e.name == dir_name && e.is_dir));
             if !already {
                 dir_tree.entry(dir_parent).or_default().push(FileEntry { name: dir_name, content: vec![], mode: MODE_DIR | PERM_R | PERM_W | PERM_X | 0x0010, is_dir: true });
             }
@@ -200,7 +200,8 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     let mut dir_lba_map: HashMap<String, u64> = HashMap::new();
     for dirpath in &dir_paths { dir_lba_map.insert((*dirpath).clone(), next_lba); next_lba += 1; }
 
-    let mut dir_nodes: HashMap<String, Vec<(Vec<u8>, Vec<u8>)>> = HashMap::new();
+    type DirNodeMap = HashMap<String, Vec<(Vec<u8>, Vec<u8>)>>;
+    let mut dir_nodes: DirNodeMap = HashMap::new();
     for dirpath in dir_paths.iter() {
         let mut node_entries = vec![];
         if let Some(entries) = dir_tree.get(*dirpath) {
@@ -215,7 +216,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
                     node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, entry.content.len() as u64, 0, 0, &entry.content)));
                 } else {
                     let extent_lba = next_lba;
-                    let block_count = (entry.content.len() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                    let block_count = entry.content.len().div_ceil(BLOCK_SIZE);
                     node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, entry.content.len() as u64, extent_lba, block_count as u32, &[])));
                     next_lba += block_count as u64;
                 }
@@ -262,7 +263,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
                 for (ename, ebytes) in node_entries {
                     if ename == entry.name.as_bytes() {
                         let extent_lba = read_u64_le(ebytes, 99);
-                        let block_count = (entry.content.len() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                        let block_count = entry.content.len().div_ceil(BLOCK_SIZE);
                         let block_start = (extent_lba as usize) * BLOCK_SIZE;
                         for i in 0..block_count {
                             let chunk_start = i * BLOCK_SIZE;

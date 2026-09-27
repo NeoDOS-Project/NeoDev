@@ -29,6 +29,12 @@ pub struct VmConfig {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StorageMode { Ahci, Ata, Nvme, Virtio }
 
+/// A running VM instance controlled by a backend.
+///
+/// `serial_path` and `pid` complete the backend contract even though the
+/// current headless/test flow reads the serial log directly and does not need a
+/// PID (VirtualBox instances are not child processes).
+#[allow(dead_code)]
 pub trait VmInstance: Send {
     fn serial_path(&self) -> Option<&Path>;
     fn wait_timeout(&mut self, timeout: Duration) -> Result<Option<i32>>;

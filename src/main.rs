@@ -13,7 +13,7 @@ mod vmm;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "neodev", about = "NeoDOS Development Tool", version, long_about = "Unified build, image, run, test, and CI toolchain for the NeoDOS ecosystem")]
@@ -350,6 +350,7 @@ fn resolve_neodos_root(cli_path: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // CLI dispatch: one flag per argument
 fn cmd_build(
     cfg: &config::Config, disc: &discovery::Discovery,
     kernel: bool, bootloader: bool, userbin: bool, nxl: bool, nem: bool,
@@ -398,9 +399,10 @@ fn cmd_build(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // CLI dispatch: one flag per argument
 fn cmd_image(
     cfg: &config::Config, disc: &discovery::Discovery,
-    output: &PathBuf, _esp_size: u64, _neodos_size: u64,
+    output: &Path, _esp_size: u64, _neodos_size: u64,
     blocks: u64, label: &str, no_build: bool,
 ) -> Result<()> {
     println!("{} NeoDOS Image Generation", "[*]".bold().cyan());
@@ -435,9 +437,10 @@ fn cmd_image(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // CLI dispatch: one flag per argument
 fn cmd_run(
     cfg: &config::Config,
-    storage_str: &str, net_str: &str, kvm: bool, gdb: bool, bdm: bool,
+    storage_str: &str, net_str: &str, _kvm: bool, gdb: bool, _bdm: bool,
     headless: bool, serial: Option<&str>, backend: Option<&str>,
 ) -> Result<()> {
     let storage = match storage_str {
@@ -458,7 +461,7 @@ fn cmd_run(
     let actual_backend = backend.unwrap_or(&cfg.vm_backend);
 
     let opts = run::RunOptions {
-        storage, net, kvm, gdb, headless, bdm,
+        storage, net, gdb, headless,
         serial_file: serial.map(|s| s.to_string()),
         backend: actual_backend.to_string(),
     };
@@ -468,7 +471,7 @@ fn cmd_run(
 
 fn cmd_test(
     cfg: &config::Config,
-    storage_str: &str, kvm: bool, iterations: u32, timeout: u64, backend: Option<&str>,
+    storage_str: &str, _kvm: bool, iterations: u32, timeout: u64, backend: Option<&str>,
 ) -> Result<()> {
     use vmm::StorageMode;
     let storage = match storage_str {
@@ -481,7 +484,7 @@ fn cmd_test(
     let actual_backend = backend.unwrap_or(&cfg.vm_backend);
 
     let opts = test_::TestOptions {
-        storage, kvm, iterations, timeout,
+        storage, iterations, timeout,
         backend: actual_backend.to_string(),
     };
 
@@ -515,6 +518,7 @@ fn cmd_dhcp(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // CLI dispatch: one flag per argument
 fn cmd_clean(
     cfg: &config::Config, disc: &discovery::Discovery,
     all: bool, kernel: bool, bootloader: bool, userbin: bool, nxl: bool, nem: bool, images: bool,
