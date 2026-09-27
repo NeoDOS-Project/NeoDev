@@ -11,7 +11,6 @@ static SERIAL_LOG: &str = "/tmp/neodos_serial.log";
 
 pub struct TestOptions {
     pub storage: StorageMode,
-    pub kvm: bool,
     pub iterations: u32,
     pub timeout: u64,
     pub backend: String,
@@ -24,14 +23,7 @@ pub struct TestResult {
     pub kernel_failed_tests: Vec<String>,
     pub command_tests_passed: bool,
     pub shell_tests_passed: bool,
-    pub total_duration: Duration,
     pub panics: Vec<String>,
-}
-
-pub struct DhcpTestResult {
-    pub dhcp_passed: bool,
-    pub output_lines: Vec<String>,
-    pub total_duration: Duration,
 }
 
 pub fn run_tests(cfg: &Config, opts: &TestOptions) -> Result<TestResult> {
@@ -90,7 +82,7 @@ fn wait_for_test_completion(instance: &mut Box<dyn vmm::VmInstance>, timeout_sec
     let mut last_serial_len = 0u64;
     while Instant::now() < deadline {
         if let Some(exit_code) = instance.wait_timeout(Duration::from_millis(100))? {
-            return Ok(TestResult { kernel_tests_passed: false, kernel_count: None, kernel_failed_count: None, kernel_failed_tests: vec![], command_tests_passed: false, shell_tests_passed: false, total_duration: Duration::ZERO, panics: vec![format!("VM exited early: code {}", exit_code)] });
+            return Ok(TestResult { kernel_tests_passed: false, kernel_count: None, kernel_failed_count: None, kernel_failed_tests: vec![], command_tests_passed: false, shell_tests_passed: false, panics: vec![format!("VM exited early: code {}", exit_code)] });
         }
         if let Ok(new_data) = read_serial_since(last_serial_len) {
             last_serial_len += new_data.len() as u64;
@@ -180,7 +172,7 @@ fn analyze_results(lines: &[String]) -> Result<TestResult> {
             if clean.contains(kw) { panics.push(clean.clone()); }
         }
     }
-    Ok(TestResult { kernel_tests_passed: kernel_ok, kernel_count, kernel_failed_count, kernel_failed_tests, command_tests_passed: cmd_ok, shell_tests_passed: sh_ok, total_duration: Duration::ZERO, panics })
+    Ok(TestResult { kernel_tests_passed: kernel_ok, kernel_count, kernel_failed_count, kernel_failed_tests, command_tests_passed: cmd_ok, shell_tests_passed: sh_ok, panics })
 }
 
 fn print_test_result(result: &TestResult, elapsed: Duration) {
@@ -212,40 +204,9 @@ fn print_test_result(result: &TestResult, elapsed: Duration) {
     println!("  Duration: {:.1}s", elapsed.as_secs_f64());
 }
 
-#[cfg(test)]
-mod tests {
-    use super::analyze_results;
-
-    #[test]
-    fn parses_all_passed_summary() {
-        let result = analyze_results(&["All 685 kernel tests passed.".into()]).unwrap();
-        assert!(result.kernel_tests_passed);
-        assert_eq!(result.kernel_count, Some(685));
-        assert_eq!(result.kernel_failed_count, Some(0));
-    }
-
-    #[test]
-    fn parses_real_failures_and_names() {
-        let result = analyze_results(&[
-            "TEST rq_one ... FAIL: assertion failed".into(),
-            "2 kernel tests passed, 1 failed.".into(),
-        ]).unwrap();
-        assert!(!result.kernel_tests_passed);
-        assert_eq!(result.kernel_failed_count, Some(1));
-        assert_eq!(result.kernel_failed_tests, vec!["rq_one"]);
-    }
-
-    #[test]
-    fn ignores_fail_text_without_kernel_summary() {
-        let result = analyze_results(&["expected message: FAIL is not a test result".into()]).unwrap();
-        assert!(!result.kernel_tests_passed);
-        assert!(result.kernel_failed_tests.is_empty());
-    }
-}
-
 // DHCP Integration Test
 
-pub fn run_dhcp_test(cfg: &Config, disc: &Discovery, backend: &str, timeout_secs: u64) -> Result<DhcpTestResult> {
+pub fn run_dhcp_test(cfg: &Config, disc: &Discovery, backend: &str, timeout_secs: u64) -> Result<()> {
     let start = Instant::now();
     println!("{} NeoDOS DHCP Integration Test (bridge)", "[*]".bold().cyan());
     println!("  Backend: {}", backend);
@@ -287,7 +248,7 @@ pub fn run_dhcp_test(cfg: &Config, disc: &Discovery, backend: &str, timeout_secs
     result
 }
 
-pub fn run_dhcp_test_qemu(cfg: &Config, disc: &Discovery, timeout_secs: u64) -> Result<DhcpTestResult> {
+pub fn run_dhcp_test_qemu(cfg: &Config, disc: &Discovery, timeout_secs: u64) -> Result<()> {
     let start = Instant::now();
     println!("{} NeoDOS DHCP Integration Test (QEMU)", "[*]".bold().cyan());
     println!("  Network: user-mode (SLiRP)");
@@ -328,7 +289,7 @@ pub fn run_dhcp_test_qemu(cfg: &Config, disc: &Discovery, timeout_secs: u64) -> 
     result
 }
 
-fn wait_for_dhcp_result(instance: &mut Box<dyn vmm::VmInstance>, timeout_secs: u64, start: &Instant) -> Result<DhcpTestResult> {
+fn wait_for_dhcp_result(instance: &mut Box<dyn vmm::VmInstance>, timeout_secs: u64, start: &Instant) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut output_lines: Vec<String> = vec![];
     let mut last_serial_len = 0u64;
@@ -364,7 +325,7 @@ fn wait_for_dhcp_result(instance: &mut Box<dyn vmm::VmInstance>, timeout_secs: u
     println!();
     print_dhcp_test_result(&output_lines, dhcp_passed, dhcp_done, elapsed);
 
-    Ok(DhcpTestResult { dhcp_passed, output_lines, total_duration: elapsed })
+    Ok(())
 }
 
 fn print_dhcp_serial_line(line: &str) {
@@ -408,4 +369,35 @@ fn strip_ansi(s: &str) -> String {
         } else { result.push(c); }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_results;
+
+    #[test]
+    fn parses_all_passed_summary() {
+        let result = analyze_results(&["All 685 kernel tests passed.".into()]).unwrap();
+        assert!(result.kernel_tests_passed);
+        assert_eq!(result.kernel_count, Some(685));
+        assert_eq!(result.kernel_failed_count, Some(0));
+    }
+
+    #[test]
+    fn parses_real_failures_and_names() {
+        let result = analyze_results(&[
+            "TEST rq_one ... FAIL: assertion failed".into(),
+            "2 kernel tests passed, 1 failed.".into(),
+        ]).unwrap();
+        assert!(!result.kernel_tests_passed);
+        assert_eq!(result.kernel_failed_count, Some(1));
+        assert_eq!(result.kernel_failed_tests, vec!["rq_one"]);
+    }
+
+    #[test]
+    fn ignores_fail_text_without_kernel_summary() {
+        let result = analyze_results(&["expected message: FAIL is not a test result".into()]).unwrap();
+        assert!(!result.kernel_tests_passed);
+        assert!(result.kernel_failed_tests.is_empty());
+    }
 }

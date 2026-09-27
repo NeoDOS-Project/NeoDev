@@ -157,7 +157,7 @@ pub fn build_nem_drivers(disc: &Discovery) -> Result<Vec<(String, bool)>> {
         std::fs::create_dir_all(&output_dir)?;
 
         let status = Command::new("python3")
-            .arg(&project.path.join("build_nem.py"))
+            .arg(project.path.join("build_nem.py"))
             .arg(&output_dir)
             .current_dir(&project.path)
             .status()

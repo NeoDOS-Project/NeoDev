@@ -10,6 +10,7 @@ pub struct QemuBackend;
 
 struct QemuInstance {
     child: Child,
+    #[allow(dead_code)]
     serial_file: Option<std::path::PathBuf>,
 }
 

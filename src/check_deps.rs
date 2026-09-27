@@ -870,7 +870,7 @@ fn path_matches(pattern: &str, module_path: &str) -> bool {
     let pat = pattern.replace('/', "::");
     let escaped = regex::escape(&pat);
     let re_str = format!(r"(?:^|::){}(?:::|\Z)", escaped);
-    Regex::new(&re_str).map_or(false, |re| re.is_match(module_path))
+    Regex::new(&re_str).is_ok_and(|re| re.is_match(module_path))
 }
 
 fn get_owning_subsystem<'a>(rel_path: &str, subs: &'a HashMap<&'static str, Subsystem>) -> Option<&'a str> {
@@ -883,7 +883,7 @@ fn get_owning_subsystem<'a>(rel_path: &str, subs: &'a HashMap<&'static str, Subs
             }
         }
     }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.0));
     candidates.first().map(|&(_, name)| name)
 }
 

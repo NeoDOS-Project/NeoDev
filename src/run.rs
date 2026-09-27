@@ -16,10 +16,8 @@ pub enum NetMode {
 pub struct RunOptions {
     pub storage: StorageMode,
     pub net: NetMode,
-    pub kvm: bool,
     pub gdb: bool,
     pub headless: bool,
-    pub bdm: bool,
     pub serial_file: Option<String>,
     pub backend: String,
 }

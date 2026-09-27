@@ -34,6 +34,9 @@ pub struct PluginConfig {
 }
 
 #[repr(C)]
+// Part of the stable plugin ABI: variants may be produced by external plugins
+// even when the in-tree plugin backend does not construct them yet.
+#[allow(dead_code)]
 pub enum PluginVmStatus {
     Running,
     Paused,
