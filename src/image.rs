@@ -549,15 +549,17 @@ fn ensure_gen_hiv(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-pub fn generate_registry_hive(cfg: &Config) -> Result<()> {
+pub fn generate_registry_hive(cfg: &Config, enable_tests: bool, enable_network_test: bool) -> Result<()> {
     println!("{} Generating SYSTEM.HIV registry hive...", "[*]".bold().cyan());
     ensure_gen_hiv(cfg)?;
     let gen_hiv = cfg.neodos_root.join("tools").join("gen-hiv").join("target").join("release").join("gen-hiv");
     let output = cfg.neodos_root.join("data").join("system.hiv");
 
-    let status = Command::new(&gen_hiv)
-        .arg(&output)
-        .status().context("Failed to run gen-hiv")?;
+    let mut cmd = Command::new(&gen_hiv);
+    cmd.arg(&output);
+    if enable_tests { cmd.arg("--enable-tests"); }
+    if enable_network_test { cmd.arg("--enable-network-test"); }
+    let status = cmd.status().context("Failed to run gen-hiv")?;
 
     if !status.success() { anyhow::bail!("Registry hive generation failed"); }
     println!("{} SYSTEM.HIV: {}", "[✓]".bold().green(), output.display());

@@ -65,6 +65,12 @@ enum Commands {
         /// NE2 filesystem blocks (default: 25600 = 100 MB at 4 KB/block)
         #[arg(long, default_value_t = 25600)]
         neodos_blocks: u64,
+        /// Enable boot-time user-mode tests (EnableTests=1 in the SYSTEM hive)
+        #[arg(long)]
+        enable_tests: bool,
+        /// Also enable the network test (EnableNetworkTest=1)
+        #[arg(long)]
+        enable_network_test: bool,
     },
     /// Create disk images (NE2, ESP, GPT)
     #[command(visible_alias = "i")]
@@ -87,6 +93,12 @@ enum Commands {
         /// Skip build — use existing artifacts
         #[arg(long)]
         no_build: bool,
+        /// Enable boot-time user-mode tests (EnableTests=1 in the SYSTEM hive)
+        #[arg(long)]
+        enable_tests: bool,
+        /// Also enable the network test (EnableNetworkTest=1)
+        #[arg(long)]
+        enable_network_test: bool,
     },
     /// Run NeoDOS in a VM
     #[command(visible_alias = "r")]
@@ -301,10 +313,10 @@ fn main() -> Result<()> {
     let disc = discovery::discover(&cfg)?;
 
     match &cli.command {
-        Commands::Build { kernel, bootloader, userbin, nxl, nem, all, quick, image, neodos_size, neodos_blocks } =>
-            cmd_build(&cfg, &disc, *kernel, *bootloader, *userbin, *nxl, *nem, *all, *quick, *image, *neodos_size, *neodos_blocks),
-        Commands::Image { output, esp_size, neodos_size, blocks, label, no_build } =>
-            cmd_image(&cfg, &disc, output, *esp_size, *neodos_size, *blocks, label, *no_build),
+        Commands::Build { kernel, bootloader, userbin, nxl, nem, all, quick, image, neodos_size, neodos_blocks, enable_tests, enable_network_test } =>
+            cmd_build(&cfg, &disc, *kernel, *bootloader, *userbin, *nxl, *nem, *all, *quick, *image, *neodos_size, *neodos_blocks, *enable_tests, *enable_network_test),
+        Commands::Image { output, esp_size, neodos_size, blocks, label, no_build, enable_tests, enable_network_test } =>
+            cmd_image(&cfg, &disc, output, *esp_size, *neodos_size, *blocks, label, *no_build, *enable_tests, *enable_network_test),
         Commands::Run { storage, net, kvm, gdb, bdm, headless, serial, backend } =>
             cmd_run(&cfg, storage, net, *kvm, *gdb, *bdm, *headless, serial.as_deref(), backend.as_deref()),
         Commands::Test { storage, kvm, iterations, timeout, backend } =>
@@ -355,6 +367,7 @@ fn cmd_build(
     cfg: &config::Config, disc: &discovery::Discovery,
     kernel: bool, bootloader: bool, userbin: bool, nxl: bool, nem: bool,
     all: bool, quick: bool, image: bool, neodos_size: u64, neodos_blocks: u64,
+    enable_tests: bool, enable_network_test: bool,
 ) -> Result<()> {
     println!("{} NeoDOS Build", "[*]".bold().cyan());
     println!();
@@ -364,7 +377,8 @@ fn cmd_build(
         report::print_build_report(&report);
         if image && report.bootloader.unwrap_or(false) {
             cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true)?;
+                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true,
+                      enable_tests, enable_network_test)?;
         } else if image {
             println!("  {} Skipping image generation (build had failures)", "[!]".bold().yellow());
         }
@@ -377,7 +391,8 @@ fn cmd_build(
         build::build_bootloader(cfg, disc)?;
         if image {
             cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true)?;
+                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true,
+                      enable_tests, enable_network_test)?;
         }
         return Ok(());
     }
@@ -394,7 +409,8 @@ fn cmd_build(
 
     if image && kernel_ok && bl_ok {
         cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                  cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true)?;
+                  cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true,
+                  enable_tests, enable_network_test)?;
     }
     Ok(())
 }
@@ -404,6 +420,7 @@ fn cmd_image(
     cfg: &config::Config, disc: &discovery::Discovery,
     output: &Path, _esp_size: u64, _neodos_size: u64,
     blocks: u64, label: &str, no_build: bool,
+    enable_tests: bool, enable_network_test: bool,
 ) -> Result<()> {
     println!("{} NeoDOS Image Generation", "[*]".bold().cyan());
     println!();
@@ -421,7 +438,7 @@ fn cmd_image(
         }
     }
 
-    image::generate_registry_hive(cfg)?;
+    image::generate_registry_hive(cfg, enable_tests, enable_network_test)?;
     let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
     image::build_ne2_image(cfg, disc, &fs_image, label, blocks)?;
     let esp_image = image::create_esp_image(cfg)?;
