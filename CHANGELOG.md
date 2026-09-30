@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`netapplier.nxe` is now installed into `/System/Tools`.** The network
+  configuration applier service (`NeoDOS-Project/NeoDOS#365`) is a new Ring 3
+  service at `C:\System\Tools\netapplier.nxe`. `collect_files()` has a hardcoded
+  user-binary list, so without this entry the built binary was silently omitted
+  from the NE2 image and the `NetApplier` service could not start.
+
 ## v0.3.0 (2026-09-27)
 
 ### Fixed
