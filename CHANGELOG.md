@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **`ntpd.nxe` is now installed into `/System/Tools`.** The NTP/SNTP daemon
+  (`NeoDOS-Project/NeoDOS#26`) is a Ring 3 service at
+  `C:\System\Tools\ntpd.nxe`. It was missing from `collect_files()`, so the
+  `Ntpd` service failed to start with `NotFound`.
 - **`netapplier.nxe` is now installed into `/System/Tools`.** The network
   configuration applier service (`NeoDOS-Project/NeoDOS#365`) is a new Ring 3
   service at `C:\System\Tools\netapplier.nxe`. `collect_files()` has a hardcoded
