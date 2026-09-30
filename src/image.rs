@@ -316,7 +316,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
     let tools_nxe = &[
         "kill", "pri", "fsck", "ndreg", "loadnem", "progress",
         "neotop", "dhcpd", "netcfg", "netapplier", "ipconfig", "cpuinfo", "neolocale", "dhcptest",
-        "nslookup",
+        "nslookup", "ntpd",
         // Moved out of /Programs to keep its single leaf within capacity.
         // The shell PATH includes System/Tools, so they stay discoverable.
         "reboot", "shtest", "stresscmd", "tree", "ver", "vol",
