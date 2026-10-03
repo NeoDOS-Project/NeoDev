@@ -888,10 +888,25 @@ fn get_owning_subsystem<'a>(rel_path: &str, subs: &'a HashMap<&'static str, Subs
 }
 
 fn extract_crate_imports(content: &str) -> Vec<String> {
-    let re = Regex::new(r"^\s*use\s+(?:crate::)?([^;]+);").unwrap();
-    content.lines().filter_map(|line| {
-        re.captures(line).map(|c| c[1].to_string())
-    }).collect()
+    let use_re = Regex::new(r"^\s*use\s+(?:crate::)?([^;]+);").unwrap();
+    let inline_re = Regex::new(r"crate::([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)").unwrap();
+    let mut out: Vec<String> = Vec::new();
+    for line in content.lines() {
+        // Strip line comments so `crate::` mentions inside comments are ignored.
+        let code = match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        };
+        if let Some(caps) = use_re.captures(code) {
+            out.push(caps[1].to_string());
+        }
+        for caps in inline_re.captures_iter(code) {
+            out.push(caps[1].to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn check_forbidden(from_subsystem: &str, imported_path: &str, subs: &HashMap<&'static str, Subsystem>) -> Vec<&'static str> {
@@ -966,4 +981,33 @@ pub fn run_check_deps(kernel_src: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_crate_imports;
+
+    #[test]
+    fn detects_use_and_inline_paths() {
+        let src = "use crate::timers::hpet::sleep_us;\n\
+                   fn f() { crate::interrupts::ioapic::is_active(); }";
+        let got = extract_crate_imports(src);
+        assert!(got.contains(&"timers::hpet::sleep_us".to_string()), "got {got:?}");
+        assert!(got.contains(&"interrupts::ioapic::is_active".to_string()), "got {got:?}");
+    }
+
+    #[test]
+    fn ignores_line_comments() {
+        let src = "// crate::timers::nope\nlet x = 1;";
+        let got = extract_crate_imports(src);
+        assert!(!got.iter().any(|p| p.starts_with("timers")), "got {got:?}");
+    }
+
+    #[test]
+    fn deduplicates_use_and_inline() {
+        let src = "use crate::hal::raw;\nfn f() { crate::hal::raw::raw_cli(); }";
+        let got = extract_crate_imports(src);
+        let n = got.iter().filter(|p| p.as_str() == "hal::raw").count();
+        assert_eq!(n, 1, "got {got:?}");
+    }
 }
