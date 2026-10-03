@@ -869,7 +869,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
 fn path_matches(pattern: &str, module_path: &str) -> bool {
     let pat = pattern.replace('/', "::");
     let escaped = regex::escape(&pat);
-    let re_str = format!(r"(?:^|::){}(?:::|\Z)", escaped);
+    let re_str = format!(r"(?:^|::){}(?:::|\z)", escaped);
     Regex::new(&re_str).is_ok_and(|re| re.is_match(module_path))
 }
 
@@ -1060,5 +1060,19 @@ mod tests {
     fn empty_baseline_means_all_new() {
         let current = vec!["a".to_string()];
         assert_eq!(new_violations(&current, &[]), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn path_matches_full_and_segment() {
+        assert!(super::path_matches("drivers", "drivers::foo"));
+        assert!(super::path_matches("timers", "timers::apic::x"));
+        assert!(super::path_matches("fs", "vfs::fs"));
+    }
+
+    #[test]
+    fn path_matches_rejects_partial_and_unrelated() {
+        assert!(!super::path_matches("fs", "vfs"));
+        assert!(!super::path_matches("drivers", "drivers_extra"));
+        assert!(!super::path_matches("hal", "arch"));
     }
 }
