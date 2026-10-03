@@ -572,7 +572,9 @@ fn cmd_nxp(cfg: &config::Config, disc: &discovery::Discovery, all: bool, name: O
 
 fn cmd_check_deps(cfg: &config::Config) -> Result<()> {
     let kernel_src = cfg.neodos_root.join("neodos-kernel").join("src");
-    check_deps::run_check_deps(&kernel_src)
+    let baseline_path = cfg.neodos_root.join("check-deps-baseline.txt");
+    let baseline = if baseline_path.exists() { Some(baseline_path) } else { None };
+    check_deps::run_check_deps(&kernel_src, baseline.as_deref())
 }
 
 fn cmd_shell(cfg: &config::Config, _disc: &discovery::Discovery, action: &ShellAction) -> Result<()> {
