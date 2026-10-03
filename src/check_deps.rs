@@ -926,7 +926,7 @@ fn check_forbidden(from_subsystem: &str, imported_path: &str, subs: &HashMap<&'s
     violations
 }
 
-pub fn run_check_deps(kernel_src: &Path) -> Result<()> {
+pub fn run_check_deps(kernel_src: &Path, baseline: Option<&Path>) -> Result<()> {
     let subs = subsystems();
     let mut violations: Vec<String> = Vec::new();
 
@@ -971,21 +971,59 @@ pub fn run_check_deps(kernel_src: &Path) -> Result<()> {
     println!("NeoDOS Dependency Check");
     println!("{}", "=".repeat(60));
 
-    if violations.is_empty() {
-        println!("\n\u{2705} No dependency violations found.");
-    } else {
-        println!("\n\u{274c} {} violation(s) found:\n", violations.len());
-        for v in &violations {
-            println!("{}", v);
+    match baseline {
+        Some(path) if path.exists() => {
+            let baseline_text = std::fs::read_to_string(path)?;
+            let baselined: Vec<String> = baseline_text
+                .lines()
+                .map(|l| l.trim_end().to_string())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            let new = new_violations(&violations, &baselined);
+            if new.is_empty() {
+                println!(
+                    "\n\u{2705} No new dependency violations ({} baselined).",
+                    baselined.len()
+                );
+                Ok(())
+            } else {
+                println!("\n\u{274c} {} new dependency violation(s):\n", new.len());
+                for v in &new {
+                    println!("{}", v);
+                }
+                anyhow::bail!("{} new dependency violation(s)", new.len())
+            }
+        }
+        _ => {
+            // No baseline configured: report but do not fail (legacy behavior).
+            if violations.is_empty() {
+                println!("\n\u{2705} No dependency violations found.");
+            } else {
+                println!(
+                    "\n\u{274c} {} violation(s) found (no baseline configured; not failing):\n",
+                    violations.len()
+                );
+                for v in &violations {
+                    println!("{}", v);
+                }
+            }
+            Ok(())
         }
     }
+}
 
-    Ok(())
+/// Return the current violations that are not present in the baseline.
+fn new_violations(current: &[String], baseline: &[String]) -> Vec<String> {
+    current
+        .iter()
+        .filter(|v| !baseline.contains(v))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::extract_crate_imports;
+    use super::{extract_crate_imports, new_violations};
 
     #[test]
     fn detects_use_and_inline_paths() {
@@ -1009,5 +1047,18 @@ mod tests {
         let got = extract_crate_imports(src);
         let n = got.iter().filter(|p| p.as_str() == "hal::raw").count();
         assert_eq!(n, 1, "got {got:?}");
+    }
+
+    #[test]
+    fn baseline_filters_known_violations() {
+        let current = vec!["a".to_string(), "b".to_string()];
+        let baseline = vec!["a".to_string()];
+        assert_eq!(new_violations(&current, &baseline), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn empty_baseline_means_all_new() {
+        let current = vec!["a".to_string()];
+        assert_eq!(new_violations(&current, &[]), vec!["a".to_string()]);
     }
 }
