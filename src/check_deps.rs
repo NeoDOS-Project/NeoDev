@@ -230,7 +230,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
                        "irp", "eventbus", "dpc", "kwait",
                        "handle", "object", "globals",
                        "console", "graphics", "font",
-                       "input", "timer", "interrupts",
+                       "input", "timers", "interrupts",
                        "usermode", "work_queue", "net",
                        "apc", "panic_classification",
                        "virtio", "urn", "cm", "security",
