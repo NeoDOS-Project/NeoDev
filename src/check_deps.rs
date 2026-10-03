@@ -14,7 +14,9 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
 
     m.insert("hal", Subsystem {
         paths: vec!["hal/"],
-        allowed: vec!["arch"],
+        // The HAL is the bottom layer. The only sanctioned downward edges are
+        // the architecture backend and the physical frame allocator (`memory`).
+        allowed: vec!["arch", "memory"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
             "graphics", "font", "drivers", "fs", "vfs",
@@ -24,6 +26,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
             "debugger", "exception", "watchdog", "virtio",
             "urn", "handle", "elf", "nxl", "usermode",
             "globals", "work_queue", "panic_classification",
+            "power",
             "boot_benchmark", "abi_freeze",
         ],
     });
@@ -40,6 +43,25 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
             "watchdog", "virtio", "urn", "handle", "elf",
             "nxl", "usermode", "globals", "work_queue",
             "boot_benchmark", "abi_freeze",
+        ],
+    });
+
+    // The IDT dispatch handlers legitimately reach into scheduler, console,
+    // object timers, the event bus and diagnostics. Keep this as an explicit
+    // exception instead of widening the whole `arch` subsystem.
+    m.insert("arch_idt", Subsystem {
+        paths: vec!["arch/x64/idt/"],
+        allowed: vec![
+            "arch", "hal", "memory", "scheduler", "console",
+            "object", "eventbus", "globals", "panic_classification",
+            "crash", "watchdog", "exception", "dpc", "apc",
+            "kwait", "input", "kbd", "usermode", "trace",
+        ],
+        forbidden: vec![
+            "syscall", "drivers", "fs", "vfs", "buffer", "net",
+            "cm", "security", "irp", "nem", "virtio", "urn",
+            "handle", "elf", "nxl", "work_queue", "boot_benchmark",
+            "abi_freeze",
         ],
     });
 
@@ -1074,5 +1096,21 @@ mod tests {
         assert!(!super::path_matches("fs", "vfs"));
         assert!(!super::path_matches("drivers", "drivers_extra"));
         assert!(!super::path_matches("hal", "arch"));
+    }
+
+    #[test]
+    fn hal_rules_allow_arch_and_memory() {
+        let subs = super::subsystems();
+        let hal = &subs["hal"];
+        assert!(hal.allowed.contains(&"arch"));
+        assert!(hal.allowed.contains(&"memory"));
+        assert!(hal.forbidden.contains(&"power"));
+    }
+
+    #[test]
+    fn arch_idt_exception_exists() {
+        let subs = super::subsystems();
+        assert!(subs.contains_key("arch_idt"));
+        assert!(subs["arch_idt"].allowed.contains(&"eventbus"));
     }
 }
