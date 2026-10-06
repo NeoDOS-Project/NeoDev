@@ -220,7 +220,7 @@ pub fn run_dhcp_test(cfg: &Config, disc: &Discovery, backend: &str, timeout_secs
     println!("  Generating test registry hive...");
     image::generate_test_hive(cfg, true)?;
     let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
-    image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600)?;
+    image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600, true)?;
     let esp_image = image::create_esp_image(cfg)?;
     image::create_gpt_image(cfg, &esp_image, &fs_image, &cfg.neodos_root.join("disk_image.img"))?;
     let _ = std::fs::remove_file(&esp_image);
@@ -262,7 +262,7 @@ pub fn run_dhcp_test_qemu(cfg: &Config, disc: &Discovery, timeout_secs: u64) -> 
     println!("  Generating test registry hive...");
     image::generate_test_hive(cfg, true)?;
     let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
-    image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600)?;
+    image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600, true)?;
     let esp_image = image::create_esp_image(cfg)?;
     image::create_gpt_image(cfg, &esp_image, &fs_image, &cfg.neodos_root.join("disk_image.img"))?;
     let _ = std::fs::remove_file(&esp_image);

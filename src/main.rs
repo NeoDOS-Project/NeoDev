@@ -390,8 +390,11 @@ fn cmd_build(
         build::build_kernel(cfg, disc)?;
         build::build_bootloader(cfg, disc)?;
         if image {
+            // #21: `no_build = false` makes image generation refresh its build
+            // inputs (NLT + NEM drivers) so a quick image never ships a stale
+            // driver (NeoDOS #491: stale rtc.nem without EVENT_RTC_WRITE).
             cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true,
+                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", false,
                       enable_tests, enable_network_test)?;
         }
         return Ok(());
@@ -408,8 +411,10 @@ fn cmd_build(
     if nem { let _ = build::build_nem_drivers(disc)?; }
 
     if image && kernel_ok && bl_ok {
+        // #21: refresh image build inputs (NLT + NEM drivers) so partial builds
+        // do not fall back to stale gitignored NEM drivers.
         cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                  cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true,
+                  cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", false,
                   enable_tests, enable_network_test)?;
     }
     Ok(())
@@ -440,7 +445,7 @@ fn cmd_image(
 
     image::generate_registry_hive(cfg, enable_tests, enable_network_test)?;
     let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
-    image::build_ne2_image(cfg, disc, &fs_image, label, blocks)?;
+    image::build_ne2_image(cfg, disc, &fs_image, label, blocks, !no_build)?;
     let esp_image = image::create_esp_image(cfg)?;
     image::create_gpt_image(cfg, &esp_image, &fs_image, output)?;
 
