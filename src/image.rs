@@ -167,9 +167,16 @@ struct FileEntry {
     is_dir: bool,
 }
 
-pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &str, blocks: u64) -> Result<()> {
+pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &str, blocks: u64, build_drivers: bool) -> Result<()> {
     let start = Instant::now();
     println!("{} Building NE2 filesystem image...", "[*]".bold().cyan());
+    // #21: never package stale NEM drivers. If drivers were not built in this
+    // process, build them now so collect_files() uses the fresh
+    // /tmp/nem_drivers_<pid> output instead of the gitignored data/nem_bin/**
+    // fallback (NeoDOS #491).
+    if build_drivers {
+        let _ = crate::build::ensure_nem_drivers(disc);
+    }
     let files = collect_files(cfg, disc)?;
 
     let root_marker = "/";

@@ -181,6 +181,24 @@ pub fn build_nem_drivers(disc: &Discovery) -> Result<Vec<(String, bool)>> {
     Ok(results)
 }
 
+/// Ensure NEM drivers are built into this process's per-run output directory.
+///
+/// The image builder reads drivers from `/tmp/nem_drivers_<pid>` and silently
+/// falls back to the gitignored `data/nem_bin/**` copies when that directory is
+/// absent. Those fallback copies can be arbitrarily stale, so an image that is
+/// allowed to build must never rely on them (NeoDOS #491: a stale `rtc.nem`
+/// without `EVENT_RTC_WRITE` support). Idempotent within a process.
+pub fn ensure_nem_drivers(disc: &Discovery) -> Result<()> {
+    let nem_dir = format!("/tmp/nem_drivers_{}", std::process::id());
+    let has_boot = std::path::Path::new(&nem_dir).join("BOOT").exists();
+    let has_system = std::path::Path::new(&nem_dir).join("SYSTEM").exists();
+    if has_boot || has_system {
+        return Ok(());
+    }
+    let _ = build_nem_drivers(disc)?;
+    Ok(())
+}
+
 pub fn compile_nlt_files(cfg: &Config) -> Result<()> {
     let nltc_path = cfg.neodos_root.join("tools").join("nltc");
     let nltc_bin = nltc_path.join("target").join("debug").join("nltc");
