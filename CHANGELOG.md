@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **Image builder: warn on driverless images, support multi-region free list
+  (#25).** `build_ne2_image()` now prints a loud warning when it is about to
+  package an image with zero NEM drivers (`data/nem_bin`/build output empty),
+  which previously produced a "successful" image whose boot-time driver tests
+  (`ob_set_datetime_rtc_write_acks`) failed for non-obvious reasons. The NE2
+  free-list node is now emitted from a computed region list (up to 340 regions
+  per node) and fails fast if more than one node would be required instead of
+  silently truncating.
+
 - **`ntpd.nxe` is now installed into `/System/Tools`.** The NTP/SNTP daemon
   (`NeoDOS-Project/NeoDOS#26`) is a Ring 3 service at
   `C:\System\Tools\ntpd.nxe`. It was missing from `collect_files()`, so the
