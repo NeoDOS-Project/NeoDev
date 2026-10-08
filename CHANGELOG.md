@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Image builder: package `snapshot.nxe` (#569).** Add `snapshot` to the
+  `System/Tools` list so the NeoFS v2 snapshot command is installed at
+  `C:\System\Tools\snapshot.nxe` (NeoDOS #569).
+
 - **Image builder: multi-leaf directory B-trees (#396).** Directories are now
   emitted as proper B-trees: entries are split into leaf-sized chunks (by
   serialized bytes) and, when more than one leaf is needed, a single internal
