@@ -179,6 +179,22 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     }
     let files = collect_files(cfg, disc)?;
 
+    // Guard against silently packaging a driverless image: Boot-critical
+    // driver tests (e.g. ob_set_datetime_rtc_write_acks) fail when no NEM
+    // driver is present, which is confusing if the image looked "successful".
+    let nem_count = files
+        .iter()
+        .filter(|f| f.name.starts_with("/System/Drivers/") && f.name.ends_with(".nem"))
+        .count();
+    if nem_count == 0 {
+        eprintln!(
+            "{} WARNING: packaging an image with 0 NEM drivers. No *.nem was found under \
+             data/nem_bin or the build output. Boot-time driver tests will fail; use a full \
+             'neodev build --image' (without --quick/--no-build).",
+            "[!]".bold().yellow()
+        );
+    }
+
     let root_marker = "/";
     let mut dir_tree: HashMap<String, Vec<FileEntry>> = HashMap::new();
     dir_tree.insert(root_marker.to_string(), vec![]);
@@ -239,18 +255,35 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
 
     let root_lba = dir_lba_map.get(root_marker).copied().unwrap_or(1);
 
-    // NE2 v2 free list (issue #15): a type-3 node at block 1 (unused by the
-    // directory/data allocator, which starts at block 2) describing the single
-    // contiguous free region [next_lba, total_blocks). Written before the
-    // superblock so `freelist_lba` can point at it.
-    let freelist_lba: u64 = if next_lba < total_blocks { 1 } else { 0 };
+    // NE2 v2 free list (NeoDOS #15): a type-3 node at block 1 (unused by the
+    // directory/data allocator, which starts at block 2) holding the free
+    // regions. A freshly built image has contiguous allocations, so this is
+    // normally the single region [next_lba, total_blocks); a node can hold up
+    // to `REGIONS_PER_NODE` regions.
+    const REGIONS_PER_NODE: usize = 340; // (4096 - 8 header - 8 next_lba) / 12
+    let free_regions: Vec<(u64, u32)> = if next_lba < total_blocks {
+        vec![(next_lba, (total_blocks - next_lba) as u32)]
+    } else {
+        Vec::new()
+    };
+    if free_regions.len() > REGIONS_PER_NODE {
+        anyhow::bail!(
+            "NE2 image free list needs {} regions (> {} in one node); chained \
+             free-list emission is not implemented",
+            free_regions.len(),
+            REGIONS_PER_NODE
+        );
+    }
+    let freelist_lba: u64 = if free_regions.is_empty() { 0 } else { 1 };
     if freelist_lba != 0 {
         let mut node = vec![0u8; BLOCK_SIZE];
-        let mut off = 8usize;
         put_u16_le(&mut node, 0, 3); // node_type = freelist
-        put_u16_le(&mut node, 2, 1); // one region
-        put_u64_le(&mut node, off, next_lba); off += 8;
-        put_u32_le(&mut node, off, (total_blocks - next_lba) as u32); off += 4;
+        put_u16_le(&mut node, 2, free_regions.len() as u16);
+        let mut off = 8usize;
+        for (start, len) in &free_regions {
+            put_u64_le(&mut node, off, *start); off += 8;
+            put_u32_le(&mut node, off, *len); off += 4;
+        }
         put_u64_le(&mut node, off, 0); // next_lba = 0 (end of chain)
         let cksum = crc32(&node[8..]);
         put_u32_le(&mut node, 4, cksum);
