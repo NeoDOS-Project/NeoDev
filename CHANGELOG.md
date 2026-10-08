@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **Image builder: multi-leaf directory B-trees (#396).** Directories are now
+  emitted as proper B-trees: entries are split into leaf-sized chunks (by
+  serialized bytes) and, when more than one leaf is needed, a single internal
+  node (type 0) points at them. LBAs are assigned in two passes (directory nodes
+  then file data extents) and subdirectory roots / data extents are patched into
+  their `DirEntry` before serialization. This removes the previous
+  `bail!` on directory leaf overflow. Helpers `leaf_chunks_of` /
+  `build_dir_nodes`; unit tests cover single-leaf and multi-leaf.
+
 ### Fixed
 
 - **Image builder: chained free-list nodes (#28).** The NE2 free-list emitter now

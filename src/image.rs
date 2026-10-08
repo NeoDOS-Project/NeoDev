@@ -158,6 +158,55 @@ fn make_btree_leaf(dirpath: &str, entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<
     Ok(data)
 }
 
+/// Split directory entries into leaf-sized chunks (by serialized bytes).
+fn leaf_chunks_of(entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<Vec<usize>> {
+    let mut chunks: Vec<Vec<usize>> = Vec::new();
+    let mut cur: Vec<usize> = Vec::new();
+    let mut used = 0usize;
+    for (i, (k, v)) in entries.iter().enumerate() {
+        let sz = 4 + k.len() + v.len();
+        if !cur.is_empty() && used + sz > BLOCK_SIZE - 8 {
+            chunks.push(core::mem::take(&mut cur));
+            used = 0;
+        }
+        cur.push(i);
+        used += sz;
+    }
+    if !cur.is_empty() { chunks.push(cur); }
+    if chunks.is_empty() { chunks.push(Vec::new()); }
+    chunks
+}
+
+/// Serialize a directory B-tree: leaves first, then (if more than one leaf) a
+/// single internal node pointing at them. `lbas` holds one LBA per node, leaves
+/// first; the internal node (last) references the leaves' LBAs.
+fn build_dir_nodes(entries: &[(Vec<u8>, Vec<u8>)], lbas: &[u64]) -> Result<Vec<Vec<u8>>> {
+    let chunks = leaf_chunks_of(entries);
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(lbas.len());
+    for (ci, idxs) in chunks.iter().enumerate() {
+        let chunk: Vec<(Vec<u8>, Vec<u8>)> = idxs.iter().map(|&i| entries[i].clone()).collect();
+        out.push(make_btree_leaf("<dir>", &chunk)?);
+        let _ = ci;
+    }
+    if chunks.len() > 1 {
+        let mut node = vec![0u8; BLOCK_SIZE];
+        put_u16_le(&mut node, 0, 0); // node_type = internal
+        put_u16_le(&mut node, 2, chunks.len() as u16);
+        let mut off = 8usize;
+        for (ci, idxs) in chunks.iter().enumerate() {
+            let key: &[u8] = if ci == 0 { &[] } else { entries[idxs[0]].0.as_slice() };
+            put_u16_le(&mut node, off, key.len() as u16); off += 2;
+            node[off..off + key.len()].copy_from_slice(key); off += key.len();
+            put_u16_le(&mut node, off, 8); off += 2;
+            put_u64_le(&mut node, off, lbas[ci]); off += 8;
+        }
+        let cksum = crc32(&node[8..]);
+        put_u32_le(&mut node, 4, cksum);
+        out.push(node);
+    }
+    Ok(out)
+}
+
 /// Flush a bucket of locale NLTs into `/System/Locale/<dir>/`.
 fn push_locale_bucket(
     files: &mut Vec<FileEntry>,
@@ -258,34 +307,93 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     let mut dir_paths: Vec<&String> = dir_tree.keys().collect();
     dir_paths.sort_by_key(|k| k.matches('/').count());
 
-    let mut next_lba: u64 = 2;
-    let mut dir_lba_map: HashMap<String, u64> = HashMap::new();
-    for dirpath in &dir_paths { dir_lba_map.insert((*dirpath).clone(), next_lba); next_lba += 1; }
-
-    type DirNodeMap = HashMap<String, Vec<(Vec<u8>, Vec<u8>)>>;
-    let mut dir_nodes: DirNodeMap = HashMap::new();
+    // ── Directory layout (multi-leaf, NeoDOS #396) ─────────────────
+    // Each directory is a B-tree: one or more leaf nodes (type 1) plus, if the
+    // entries do not fit in a single leaf, one internal node (type 0) pointing
+    // at the leaves. Directory nodes start at block 2 (0/1 reserved).
+    type DirEntries = Vec<(Vec<u8>, Vec<u8>)>; // (name, 128-byte direntry)
+    let mut dir_entries: HashMap<String, DirEntries> = HashMap::new();
     for dirpath in dir_paths.iter() {
-        let mut node_entries = vec![];
+        let mut node_entries: DirEntries = vec![];
         if let Some(entries) = dir_tree.get(*dirpath) {
             for entry in entries {
-                if entry.is_dir {
-                    let subdir_path = if *dirpath == root_marker { format!("/{}", entry.name) }
-                        else { format!("/{}/{}", dirpath.trim_start_matches('/'), entry.name) };
-                    let subdir_path = if subdir_path.starts_with('/') { subdir_path } else { format!("/{}", subdir_path) };
-                    let subdir_lba = dir_lba_map.get(&subdir_path).copied().unwrap_or(0);
-                    node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, 0, subdir_lba, 0, &[])));
-                } else if entry.content.len() <= INLINE_MAX {
-                    node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, entry.content.len() as u64, 0, 0, &entry.content)));
+                if entry.is_dir || entry.content.len() > INLINE_MAX {
+                    // extent_lba/count se rellenan más tarde (raíz de subdir /
+                    // extent de datos).
+                    node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, entry.content.len() as u64, 0, 0, &[])));
                 } else {
-                    let extent_lba = next_lba;
-                    let block_count = entry.content.len().div_ceil(BLOCK_SIZE);
-                    node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, entry.content.len() as u64, extent_lba, block_count as u32, &[])));
-                    next_lba += block_count as u64;
+                    node_entries.push((entry.name.as_bytes().to_vec(), make_direntry(&entry.name, entry.mode, entry.content.len() as u64, 0, 0, &entry.content)));
                 }
             }
         }
         node_entries.sort_by(|a, b| a.0.cmp(&b.0));
-        dir_nodes.insert((*dirpath).clone(), node_entries);
+        dir_entries.insert((*dirpath).clone(), node_entries);
+    }
+
+    // Asignar LBAs consecutivas a todos los nodos de cada directorio (hojas y,
+    // si hace falta, un nodo interno). La raíz es el interno o la única hoja.
+    let mut next_lba: u64 = 2;
+    let mut dir_lbas: HashMap<String, (Vec<u64>, usize)> = HashMap::new();
+    for dirpath in dir_paths.iter() {
+        let chunks = leaf_chunks_of(dir_entries.get(*dirpath).unwrap());
+        let num_leaves = chunks.len();
+        let has_internal = num_leaves > 1;
+        if has_internal && num_leaves > 60 {
+            anyhow::bail!(
+                "NE2 directory '{}' needs {} leaves; multi-level internal nodes are not implemented",
+                dirpath, num_leaves
+            );
+        }
+        let num_nodes = num_leaves + if has_internal { 1 } else { 0 };
+        let lbas: Vec<u64> = (0..num_nodes as u64).map(|i| next_lba + i).collect();
+        let root_idx = if has_internal { num_leaves } else { 0 };
+        dir_lbas.insert((*dirpath).clone(), (lbas, root_idx));
+        next_lba += num_nodes as u64;
+    }
+    let dir_lba_map: HashMap<String, u64> = dir_lbas
+        .iter()
+        .map(|(k, (lbas, ri))| (k.clone(), lbas[*ri]))
+        .collect();
+
+    // Rellenar la raíz de cada subdirectorio en su DirEntry (offset 99).
+    for dirpath in dir_paths.iter() {
+        let subdirs: Vec<String> = dir_tree
+            .get(*dirpath)
+            .map(|es| es.iter().filter(|e| e.is_dir).map(|e| {
+                if *dirpath == root_marker { format!("/{}", e.name) }
+                else { format!("/{}/{}", dirpath.trim_start_matches('/'), e.name) }
+            }).collect())
+            .unwrap_or_default();
+        if let Some(entries) = dir_entries.get_mut(*dirpath) {
+            for sub in &subdirs {
+                let name = sub.rsplit('/').next().unwrap_or("").as_bytes();
+                let lba = dir_lba_map.get(sub).copied().unwrap_or(0);
+                if let Some((_, v)) = entries.iter_mut().find(|(k, _)| k.as_slice() == name) {
+                    put_u64_le(v, 99, lba);
+                }
+            }
+        }
+    }
+
+    // Asignar extents de datos (después de todos los nodos de directorio) y
+    // rellenarlos en las entradas.
+    for dirpath in dir_paths.iter() {
+        let files: Vec<(String, usize)> = dir_tree
+            .get(*dirpath)
+            .map(|es| es.iter().filter(|e| !e.is_dir && e.content.len() > INLINE_MAX)
+                .map(|e| (e.name.clone(), e.content.len())).collect())
+            .unwrap_or_default();
+        for (fname, len) in files {
+            let block_count = len.div_ceil(BLOCK_SIZE);
+            let extent_lba = next_lba;
+            next_lba += block_count as u64;
+            if let Some(entries) = dir_entries.get_mut(*dirpath) {
+                if let Some((_, v)) = entries.iter_mut().find(|(k, _)| k.as_slice() == fname.as_bytes()) {
+                    put_u64_le(v, 99, extent_lba);
+                    put_u32_le(v, 107, block_count as u32);
+                }
+            }
+        }
     }
 
     let total_blocks = next_lba.max(blocks);
@@ -348,31 +456,32 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     put_u32_le(&mut sb, 109, cksum);
     image[..SECTOR_SIZE].copy_from_slice(&sb);
 
-    for (dirpath, node_entries) in &dir_nodes {
-        if let Some(&lba) = dir_lba_map.get(dirpath) {
-            let node_data = make_btree_leaf(dirpath, node_entries)?;
-            let offset = (lba as usize) * BLOCK_SIZE;
-            if offset + BLOCK_SIZE <= image.len() { image[offset..offset + BLOCK_SIZE].copy_from_slice(&node_data); }
+    // Escribir los nodos B-tree de cada directorio (hojas + interno).
+    for dirpath in dir_paths.iter() {
+        let entries = dir_entries.get(*dirpath).unwrap();
+        let (lbas, _) = dir_lbas.get(*dirpath).unwrap();
+        let nodes = build_dir_nodes(entries, lbas)?;
+        for (ni, data) in nodes.iter().enumerate() {
+            let off = (lbas[ni] as usize) * BLOCK_SIZE;
+            if off + BLOCK_SIZE <= image.len() { image[off..off + BLOCK_SIZE].copy_from_slice(data); }
         }
     }
 
+    // Escribir los bloques de datos de los ficheros.
     for (dirpath, entries) in &dir_tree {
         for entry in entries {
             if entry.is_dir || entry.content.len() <= INLINE_MAX { continue; }
-            if let Some(node_entries) = dir_nodes.get(dirpath) {
-                for (ename, ebytes) in node_entries {
-                    if ename == entry.name.as_bytes() {
-                        let extent_lba = read_u64_le(ebytes, 99);
-                        let block_count = entry.content.len().div_ceil(BLOCK_SIZE);
-                        let block_start = (extent_lba as usize) * BLOCK_SIZE;
-                        for i in 0..block_count {
-                            let chunk_start = i * BLOCK_SIZE;
-                            let chunk_end = (chunk_start + BLOCK_SIZE).min(entry.content.len());
-                            let data = &entry.content[chunk_start..chunk_end];
-                            let dest = block_start + i * BLOCK_SIZE;
-                            if dest + data.len() <= image.len() { image[dest..dest + data.len()].copy_from_slice(data); }
-                        }
-                        break;
+            if let Some(des) = dir_entries.get(dirpath) {
+                if let Some((_, v)) = des.iter().find(|(k, _)| k.as_slice() == entry.name.as_bytes()) {
+                    let extent_lba = read_u64_le(v, 99);
+                    let block_count = entry.content.len().div_ceil(BLOCK_SIZE);
+                    let block_start = (extent_lba as usize) * BLOCK_SIZE;
+                    for i in 0..block_count {
+                        let chunk_start = i * BLOCK_SIZE;
+                        let chunk_end = (chunk_start + BLOCK_SIZE).min(entry.content.len());
+                        let data = &entry.content[chunk_start..chunk_end];
+                        let dest = block_start + i * BLOCK_SIZE;
+                        if dest + data.len() <= image.len() { image[dest..dest + data.len()].copy_from_slice(data); }
                     }
                 }
             }
@@ -381,7 +490,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
 
     std::fs::write(output, &image).context("Failed to write NE2 image")?;
     let actual = std::fs::metadata(output)?.len();
-    let total_entries: usize = dir_nodes.values().map(|v| v.len()).sum();
+    let total_entries: usize = dir_entries.values().map(|v| v.len()).sum();
     println!("{} NE2 image: {} ({} blocks, {} entries)", "[✓]".bold().green(), output.display(), total_blocks, total_entries);
     println!("  Size: {} ({:.1} MB)", fmt_size(actual), actual as f64 / 1_048_576.0);
     println!("  Duration: {:.1}s", start.elapsed().as_secs_f64());
@@ -825,5 +934,43 @@ mod tests {
             b += 2;
         }
         assert!(plan_freelist(regions, 1).is_err());
+    }
+
+    #[test]
+    fn dir_nodes_single_leaf() {
+        let entries: Vec<(Vec<u8>, Vec<u8>)> = (0..5)
+            .map(|i| (format!("f{}", i).into_bytes(), vec![0u8; 128]))
+            .collect();
+        assert_eq!(leaf_chunks_of(&entries).len(), 1);
+        let nodes = build_dir_nodes(&entries, &[10]).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(u16::from_le_bytes([nodes[0][0], nodes[0][1]]), 1); // leaf
+        assert_eq!(parse_leaf_keys(&nodes[0]).len(), 5);
+    }
+
+    #[test]
+    fn dir_nodes_multi_leaf() {
+        // 60 entries x ~140 B > 4 KB leaf -> multiple leaves + internal node.
+        let entries: Vec<(Vec<u8>, Vec<u8>)> = (0..60)
+            .map(|i| (format!("f{:03}", i).into_bytes(), vec![0u8; 128]))
+            .collect();
+        let chunks = leaf_chunks_of(&entries);
+        assert!(chunks.len() >= 2, "expected multiple leaves, got {}", chunks.len());
+        let lbas: Vec<u64> = (10..10 + chunks.len() as u64 + 1).collect();
+        let nodes = build_dir_nodes(&entries, &lbas).unwrap();
+        assert_eq!(nodes.len(), chunks.len() + 1);
+        // Internal node is last and has one entry per leaf.
+        let internal = &nodes[nodes.len() - 1];
+        assert_eq!(u16::from_le_bytes([internal[0], internal[1]]), 0); // internal
+        let ikeys = parse_leaf_keys(internal);
+        assert_eq!(ikeys.len(), chunks.len());
+        assert!(ikeys[0].is_empty());
+        // Leaves hold all 60 keys in order.
+        let mut all = Vec::new();
+        for l in 0..chunks.len() { all.extend(parse_leaf_keys(&nodes[l])); }
+        assert_eq!(all.len(), 60);
+        let mut sorted = all.clone();
+        sorted.sort();
+        assert_eq!(all, sorted);
     }
 }
