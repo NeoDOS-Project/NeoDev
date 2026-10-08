@@ -1,6 +1,6 @@
 use anyhow::Result;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 struct Subsystem {
@@ -66,7 +66,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("cpu", Subsystem {
-        paths: vec!["cpu.rs"],
+        paths: vec!["infra/cpu.rs"],
         allowed: vec!["arch", "hal", "memory"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
@@ -78,22 +78,6 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
             "urn", "handle", "elf", "nxl", "usermode",
             "globals", "work_queue", "panic_classification",
             "boot_benchmark", "abi_freeze",
-        ],
-    });
-
-    m.insert("scheduler_boot", Subsystem {
-        paths: vec!["scheduler/boot_"],
-        allowed: vec!["arch", "memory", "hal", "scheduler", "object",
-                       "security", "cm", "handle", "globals",
-                       "usermode", "work_queue", "irp", "eventbus",
-                       "dpc", "apc", "kwait", "panic_classification"],
-        forbidden: vec![
-            "input", "console", "graphics", "font",
-            "drivers", "fs", "vfs", "buffer", "net",
-            "interrupts", "timers", "virtio", "urn",
-            "elf", "nxl", "crash", "debugger",
-            "exception", "watchdog", "boot_benchmark",
-            "abi_freeze",
         ],
     });
 
@@ -141,39 +125,6 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
             "nem", "apc", "dpc", "kwait", "crash",
             "debugger", "exception", "watchdog", "virtio",
             "urn", "handle", "elf", "nxl", "usermode",
-            "globals", "work_queue", "panic_classification",
-            "boot_benchmark", "abi_freeze",
-        ],
-    });
-
-    m.insert("memory_paging", Subsystem {
-        paths: vec!["memory/paging"],
-        allowed: vec!["arch", "hal", "memory", "panic_classification"],
-        forbidden: vec![
-            "scheduler", "syscall", "input", "console",
-            "graphics", "font", "drivers", "fs", "vfs",
-            "buffer", "net", "cm", "object", "security",
-            "irp", "eventbus", "interrupts", "timers",
-            "nem", "apc", "dpc", "kwait", "crash",
-            "debugger", "exception", "watchdog", "virtio",
-            "urn", "handle", "elf", "nxl", "usermode",
-            "globals", "work_queue", "panic_classification",
-            "boot_benchmark", "abi_freeze",
-        ],
-    });
-
-    m.insert("memory_mmap", Subsystem {
-        paths: vec!["memory/mmap"],
-        allowed: vec!["arch", "hal", "memory", "scheduler",
-                       "panic_classification"],
-        forbidden: vec![
-            "syscall", "input", "console", "graphics",
-            "font", "drivers", "fs", "vfs", "buffer",
-            "net", "cm", "object", "security", "irp",
-            "eventbus", "interrupts", "timers", "nem",
-            "apc", "dpc", "kwait", "crash", "debugger",
-            "exception", "watchdog", "virtio", "urn",
-            "handle", "elf", "nxl", "usermode",
             "globals", "work_queue", "panic_classification",
             "boot_benchmark", "abi_freeze",
         ],
@@ -231,7 +182,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("font", Subsystem {
-        paths: vec!["font/"],
+        paths: vec!["graphics/font.rs"],
         allowed: vec!["scheduler", "hal", "arch"],
         forbidden: vec![
             "syscall", "input", "console", "memory",
@@ -288,7 +239,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("vfs", Subsystem {
-        paths: vec!["vfs/"],
+        paths: vec!["fs/vfs/"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "globals", "irp", "object", "handle",
                        "security", "drivers/block", "fs",
@@ -467,7 +418,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("nem", Subsystem {
-        paths: vec!["nem/"],
+        paths: vec!["drivers/nem/format.rs"],
         allowed: vec!["arch", "hal", "memory",
                        "panic_classification"],
         forbidden: vec![
@@ -550,23 +501,6 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         ],
     });
 
-    m.insert("debugger", Subsystem {
-        paths: vec!["debugger/"],
-        allowed: vec!["scheduler", "memory", "hal", "arch",
-                       "crash", "console", "graphics",
-                       "font", "globals", "usermode",
-                       "panic_classification"],
-        forbidden: vec![
-            "syscall", "input",
-            "drivers", "fs", "vfs", "buffer", "net",
-            "cm", "object", "security", "irp", "eventbus",
-            "interrupts", "timers", "nem", "apc", "dpc",
-            "kwait", "exception", "watchdog", "virtio",
-            "urn", "handle", "elf", "nxl",
-            "work_queue", "boot_benchmark", "abi_freeze",
-        ],
-    });
-
     m.insert("exception", Subsystem {
         paths: vec!["exception/"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
@@ -601,7 +535,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("virtio", Subsystem {
-        paths: vec!["virtio/"],
+        paths: vec!["drivers/virtio/"],
         allowed: vec!["arch", "hal", "memory",
                        "interrupts", "timers",
                        "panic_classification"],
@@ -635,7 +569,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("handle", Subsystem {
-        paths: vec!["handle/"],
+        paths: vec!["infra/handle.rs"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "object", "globals",
                        "panic_classification"],
@@ -652,7 +586,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("elf", Subsystem {
-        paths: vec!["elf.rs"],
+        paths: vec!["infra/elf.rs"],
         allowed: vec!["arch", "hal", "memory"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
@@ -669,7 +603,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("nxl", Subsystem {
-        paths: vec!["nxl.rs"],
+        paths: vec!["infra/nxl.rs"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "elf", "handle", "object", "globals",
                        "panic_classification"],
@@ -686,7 +620,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("usermode", Subsystem {
-        paths: vec!["usermode.rs"],
+        paths: vec!["infra/usermode.rs"],
         allowed: vec!["arch", "scheduler", "memory", "hal"],
         forbidden: vec![
             "syscall", "input", "console", "graphics",
@@ -703,7 +637,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("globals", Subsystem {
-        paths: vec!["globals.rs"],
+        paths: vec!["infra/globals.rs"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "vfs", "fs", "irp", "eventbus",
                        "object", "handle", "dpc", "kwait",
@@ -721,7 +655,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("work_queue", Subsystem {
-        paths: vec!["work_queue.rs"],
+        paths: vec!["infra/work_queue.rs"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "dpc", "irp", "eventbus", "globals",
                        "panic_classification"],
@@ -738,7 +672,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("panic_classification", Subsystem {
-        paths: vec!["panic_classification.rs"],
+        paths: vec!["infra/panic_classification.rs"],
         allowed: vec![],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
@@ -755,7 +689,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("boot_benchmark", Subsystem {
-        paths: vec!["boot_benchmark.rs"],
+        paths: vec!["infra/boot_benchmark.rs"],
         allowed: vec!["arch", "hal", "timers"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
@@ -773,7 +707,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("abi_freeze", Subsystem {
-        paths: vec!["abi_freeze.rs"],
+        paths: vec!["infra/abi_freeze.rs"],
         allowed: vec!["arch"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
@@ -814,25 +748,8 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         ],
     });
 
-    m.insert("usermode_shell", Subsystem {
-        paths: vec!["usermode_shell.rs", "usermode_loader.rs"],
-        allowed: vec!["scheduler", "memory", "usermode",
-                       "arch", "hal", "globals"],
-        forbidden: vec![
-            "syscall", "input", "console", "graphics",
-            "font", "drivers", "fs", "vfs", "buffer",
-            "net", "cm", "object", "security", "irp",
-            "eventbus", "interrupts", "timers", "nem",
-            "apc", "dpc", "kwait", "crash", "debugger",
-            "exception", "watchdog", "virtio", "urn",
-            "handle", "elf", "nxl",
-            "work_queue", "panic_classification",
-            "boot_benchmark", "abi_freeze",
-        ],
-    });
-
     m.insert("input_extra", Subsystem {
-        paths: vec!["kbd/"],
+        paths: vec!["input/kbd/"],
         allowed: vec!["scheduler", "hal", "arch",
                        "input", "console", "graphics",
                        "font", "eventbus", "object",
@@ -851,7 +768,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("power", Subsystem {
-        paths: vec!["power/"],
+        paths: vec!["services/power/"],
         allowed: vec!["arch", "hal", "memory", "scheduler",
                        "timers", "interrupts", "globals",
                        "cm", "object", "eventbus",
@@ -869,7 +786,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("invariants", Subsystem {
-        paths: vec!["invariants.rs"],
+        paths: vec!["infra/invariants.rs"],
         allowed: vec!["arch", "hal", "scheduler", "memory",
                        "globals", "crash", "panic_classification"],
         forbidden: vec![
@@ -951,6 +868,7 @@ fn check_forbidden(from_subsystem: &str, imported_path: &str, subs: &HashMap<&'s
 pub fn run_check_deps(kernel_src: &Path, baseline: Option<&Path>) -> Result<()> {
     let subs = subsystems();
     let mut violations: Vec<String> = Vec::new();
+    let mut used: HashSet<&str> = HashSet::new();
 
     for entry in walkdir::WalkDir::new(kernel_src)
         .into_iter()
@@ -974,6 +892,7 @@ pub fn run_check_deps(kernel_src: &Path, baseline: Option<&Path>) -> Result<()> 
             Some(s) => s,
             None => continue,
         };
+        used.insert(subsystem);
 
         let content = std::fs::read_to_string(path)?;
         let imports = extract_crate_imports(&content);
@@ -992,6 +911,18 @@ pub fn run_check_deps(kernel_src: &Path, baseline: Option<&Path>) -> Result<()> 
     println!("{}", "=".repeat(60));
     println!("NeoDOS Dependency Check");
     println!("{}", "=".repeat(60));
+
+    let mut dead: Vec<&'static str> = subs.keys().filter(|k| !used.contains(*k)).copied().collect();
+    dead.sort_unstable();
+    if !dead.is_empty() {
+        println!(
+            "\n\u{26a0}\u{fe0f}  {} subsystem path(s) match no file (stale rules):",
+            dead.len()
+        );
+        for name in &dead {
+            println!("  - {} ({})", name, subs[*name].paths.join(", "));
+        }
+    }
 
     match baseline {
         Some(path) if path.exists() => {
