@@ -19,6 +19,45 @@ const PERM_R: u16 = 0x0001;
 const PERM_W: u16 = 0x0002;
 const PERM_X: u16 = 0x0004;
 
+/// Regiones libres que caben en un nodo tipo 3 de 4 KB:
+/// `(4096 - 8 header - 8 next_lba) / 12`.
+const REGIONS_PER_NODE: usize = 340;
+
+/// Plan the free-list node chain.
+///
+/// The first node is placed at `first_lba`. If the region list needs more than
+/// one node, the extra nodes are reserved from the front of the first free
+/// region (which is shrunk accordingly). Returns `(node_lbas, adjusted_regions)`.
+fn plan_freelist(
+    mut free_regions: Vec<(u64, u32)>,
+    first_lba: u64,
+) -> Result<(Vec<u64>, Vec<(u64, u32)>)> {
+    if free_regions.is_empty() {
+        return Ok((Vec::new(), free_regions));
+    }
+    let num_nodes = (free_regions.len() + REGIONS_PER_NODE - 1) / REGIONS_PER_NODE;
+    let mut node_lbas = vec![first_lba];
+    let extra = num_nodes - 1;
+    if extra > 0 {
+        let (start, len) = free_regions[0];
+        if (len as usize) < extra {
+            anyhow::bail!(
+                "not enough contiguous free space to store {} free-list chain nodes",
+                num_nodes
+            );
+        }
+        for i in 0..extra {
+            node_lbas.push(start + i as u64);
+        }
+        if len as usize == extra {
+            free_regions.remove(0);
+        } else {
+            free_regions[0] = (start + extra as u64, len - extra as u32);
+        }
+    }
+    Ok((node_lbas, free_regions))
+}
+
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFFFFFFu32;
     for &b in data {
@@ -255,43 +294,40 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
 
     let root_lba = dir_lba_map.get(root_marker).copied().unwrap_or(1);
 
-    // NE2 v2 free list (NeoDOS #15): a type-3 node at block 1 (unused by the
-    // directory/data allocator, which starts at block 2) holding the free
-    // regions. A freshly built image has contiguous allocations, so this is
-    // normally the single region [next_lba, total_blocks); a node can hold up
-    // to `REGIONS_PER_NODE` regions.
-    const REGIONS_PER_NODE: usize = 340; // (4096 - 8 header - 8 next_lba) / 12
+    // NE2 v2 free list (NeoDOS #15): type-3 node(s) holding the free regions.
+    // The first node lives at block 1 (unused by the directory/data allocator,
+    // which starts at block 2); if the region list does not fit in one node,
+    // the extra chain nodes are reserved from the front of the free space.
     let free_regions: Vec<(u64, u32)> = if next_lba < total_blocks {
         vec![(next_lba, (total_blocks - next_lba) as u32)]
     } else {
         Vec::new()
     };
-    if free_regions.len() > REGIONS_PER_NODE {
-        anyhow::bail!(
-            "NE2 image free list needs {} regions (> {} in one node); chained \
-             free-list emission is not implemented",
-            free_regions.len(),
-            REGIONS_PER_NODE
-        );
-    }
-    let freelist_lba: u64 = if free_regions.is_empty() { 0 } else { 1 };
-    if freelist_lba != 0 {
+    let (node_lbas, free_regions) = plan_freelist(free_regions, 1)?;
+    let freelist_lba: u64 = node_lbas.first().copied().unwrap_or(0);
+    for (idx, &lba) in node_lbas.iter().enumerate() {
+        let start = (idx * REGIONS_PER_NODE).min(free_regions.len());
+        let end = (start + REGIONS_PER_NODE).min(free_regions.len());
+        let chunk = &free_regions[start..end];
         let mut node = vec![0u8; BLOCK_SIZE];
         put_u16_le(&mut node, 0, 3); // node_type = freelist
-        put_u16_le(&mut node, 2, free_regions.len() as u16);
+        put_u16_le(&mut node, 2, chunk.len() as u16);
         let mut off = 8usize;
-        for (start, len) in &free_regions {
-            put_u64_le(&mut node, off, *start); off += 8;
-            put_u32_le(&mut node, off, *len); off += 4;
+        for (rs, rl) in chunk {
+            put_u64_le(&mut node, off, *rs); off += 8;
+            put_u32_le(&mut node, off, *rl); off += 4;
         }
-        put_u64_le(&mut node, off, 0); // next_lba = 0 (end of chain)
+        let next = node_lbas.get(idx + 1).copied().unwrap_or(0);
+        put_u64_le(&mut node, off, next); // next_lba (0 = end of chain)
         let cksum = crc32(&node[8..]);
         put_u32_le(&mut node, 4, cksum);
-        let block_off = (freelist_lba as usize) * BLOCK_SIZE;
+        let block_off = (lba as usize) * BLOCK_SIZE;
         image[block_off..block_off + BLOCK_SIZE].copy_from_slice(&node);
     }
 
     let label_bytes = label.as_bytes();
+    let extra_nodes = node_lbas.len().saturating_sub(1) as u64;
+    let num_free: u64 = free_regions.iter().map(|(_, l)| *l as u64).sum();
     let mut sb = vec![0u8; SECTOR_SIZE];
     put_u32_le(&mut sb, 0, SUPERBLOCK_MAGIC_NE2);
     put_u32_le(&mut sb, 4, 2);
@@ -299,8 +335,8 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     put_u64_le(&mut sb, 16, 1);
     put_u64_le(&mut sb, 24, 0);
     put_u64_le(&mut sb, 32, total_blocks);
-    put_u64_le(&mut sb, 40, next_lba);
-    put_u64_le(&mut sb, 48, total_blocks - next_lba);
+    put_u64_le(&mut sb, 40, next_lba + extra_nodes);
+    put_u64_le(&mut sb, 48, num_free);
     sb[56] = label_bytes.len().min(32) as u8;
     let lbl_len = label_bytes.len().min(32);
     sb[57..57 + lbl_len].copy_from_slice(&label_bytes[..lbl_len]);
@@ -750,5 +786,44 @@ mod tests {
         let parsed = parse_leaf_keys(&leaf);
         assert_eq!(declared, parsed.len());
         assert_eq!(declared, entries.len());
+    }
+
+    #[test]
+    fn plan_freelist_empty() {
+        let (nodes, regions) = plan_freelist(Vec::new(), 1).unwrap();
+        assert!(nodes.is_empty());
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn plan_freelist_single_node_is_unchanged() {
+        let (nodes, regions) = plan_freelist(vec![(560, 25040)], 1).unwrap();
+        assert_eq!(nodes, vec![1]);
+        assert_eq!(regions, vec![(560, 25040)]);
+    }
+
+    #[test]
+    fn plan_freelist_chains_when_more_than_one_node_needed() {
+        let mut regions = Vec::new();
+        let mut b = 2u64;
+        for _ in 0..400 {
+            regions.push((b, 1));
+            b += 2;
+        }
+        let (nodes, adjusted) = plan_freelist(regions, 1).unwrap();
+        assert_eq!(nodes, vec![1, 2]);
+        assert_eq!(adjusted[0], (4, 1));
+        assert_eq!(adjusted.len(), 399);
+    }
+
+    #[test]
+    fn plan_freelist_fails_without_room_for_chain() {
+        let mut regions = Vec::new();
+        let mut b = 2u64;
+        for _ in 0..400 {
+            regions.push((b, 0));
+            b += 2;
+        }
+        assert!(plan_freelist(regions, 1).is_err());
     }
 }

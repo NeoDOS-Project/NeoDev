@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Image builder: chained free-list nodes (#28).** The NE2 free-list emitter now
+  writes a *chain* of type-3 nodes (`next_lba`) when the region list needs more
+  than the 340 regions that fit in one node, reserving the extra nodes from the
+  front of the free space, instead of failing. Single-node images are byte-for-
+  byte unchanged (`freelist_lba = 1`, one region). Unit tests cover single-node,
+  chained and no-room cases (`plan_freelist`).
+
 - **Image builder: warn on driverless images, support multi-region free list
   (#25).** `build_ne2_image()` now prints a loud warning when it is about to
   package an image with zero NEM drivers (`data/nem_bin`/build output empty),
