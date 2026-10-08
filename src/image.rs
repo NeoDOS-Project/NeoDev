@@ -238,6 +238,26 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     let mut image = vec![0u8; image_size];
 
     let root_lba = dir_lba_map.get(root_marker).copied().unwrap_or(1);
+
+    // NE2 v2 free list (issue #15): a type-3 node at block 1 (unused by the
+    // directory/data allocator, which starts at block 2) describing the single
+    // contiguous free region [next_lba, total_blocks). Written before the
+    // superblock so `freelist_lba` can point at it.
+    let freelist_lba: u64 = if next_lba < total_blocks { 1 } else { 0 };
+    if freelist_lba != 0 {
+        let mut node = vec![0u8; BLOCK_SIZE];
+        let mut off = 8usize;
+        put_u16_le(&mut node, 0, 3); // node_type = freelist
+        put_u16_le(&mut node, 2, 1); // one region
+        put_u64_le(&mut node, off, next_lba); off += 8;
+        put_u32_le(&mut node, off, (total_blocks - next_lba) as u32); off += 4;
+        put_u64_le(&mut node, off, 0); // next_lba = 0 (end of chain)
+        let cksum = crc32(&node[8..]);
+        put_u32_le(&mut node, 4, cksum);
+        let block_off = (freelist_lba as usize) * BLOCK_SIZE;
+        image[block_off..block_off + BLOCK_SIZE].copy_from_slice(&node);
+    }
+
     let label_bytes = label.as_bytes();
     let mut sb = vec![0u8; SECTOR_SIZE];
     put_u32_le(&mut sb, 0, SUPERBLOCK_MAGIC_NE2);
@@ -251,7 +271,11 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     sb[56] = label_bytes.len().min(32) as u8;
     let lbl_len = label_bytes.len().min(32);
     sb[57..57 + lbl_len].copy_from_slice(&label_bytes[..lbl_len]);
-    let cksum = crc32(&sb[..72]);
+    put_u64_le(&mut sb, 93, freelist_lba);
+    put_u64_le(&mut sb, 101, 0); // snapshot_table_lba
+    // CRC32 over the whole 512-byte superblock with the checksum field
+    // (offset 109) zeroed. Must match the kernel's `superblock_crc`.
+    let cksum = crc32(&sb[..SECTOR_SIZE]);
     put_u32_le(&mut sb, 109, cksum);
     image[..SECTOR_SIZE].copy_from_slice(&sb);
 
