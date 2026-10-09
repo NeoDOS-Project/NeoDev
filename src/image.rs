@@ -540,13 +540,43 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         }
     }
 
-    let nxl_map = [("libneodos.nxl", "fs.nxl"), ("libmath.nxl", "math.nxl"), ("console.nxl", "console.nxl"), ("net.nxl", "net.nxl")];
-    for (src_name, dst_name) in &nxl_map {
-        let p = root.join(src_name);
-        if p.exists() {
-            let content = std::fs::read(&p)?;
-            files.push(FileEntry { name: format!("/System/Libraries/{}", dst_name), content, mode: MODE_FILE | PERM_R | PERM_X, is_dir: false });
+    // NXL shared libraries: package every `*.nxl` produced at the project root
+    // (built by `build_nxl_libs`). A small map preserves the legacy destination
+    // names; any other library keeps its own filename. This keeps image
+    // packaging in sync with NXL discovery/build instead of a hardcoded list
+    // (NeoDOS #586), so adding a library needs no change here.
+    let nxl_legacy = [
+        ("libneodos.nxl", "fs.nxl"),
+        ("libmath.nxl", "math.nxl"),
+        ("console.nxl", "console.nxl"),
+        ("net.nxl", "net.nxl"),
+    ];
+    let mut nxl_files: Vec<(String, std::path::PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().map(|e| e == "nxl").unwrap_or(false) {
+                if let Some(name) = p.file_name() {
+                    nxl_files.push((name.to_string_lossy().to_string(), p));
+                }
+            }
         }
+    }
+    nxl_files.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, path) in &nxl_files {
+        let dst = nxl_legacy
+            .iter()
+            .find(|(src, _)| *src == name.as_str())
+            .map(|(_, dst)| *dst)
+            .unwrap_or(name.as_str());
+        let content = std::fs::read(path)?;
+        files.push(FileEntry {
+            name: format!("/System/Libraries/{}", dst),
+            content,
+            mode: MODE_FILE | PERM_R | PERM_X,
+            is_dir: false,
+        });
+        println!("  NXL packed: /System/Libraries/{}", dst);
     }
 
     let kbd_layouts = &["US", "Spanish"];
