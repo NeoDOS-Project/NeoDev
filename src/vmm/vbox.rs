@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub struct VirtualBoxBackend;
 
@@ -162,34 +162,71 @@ pub enum VdiSyncOutcome {
     Converted,
 }
 
-/// Deterministic freshness policy for the raw image -> VDI relation.
+/// Identity of the raw disk image used for the freshness decision.
 ///
-/// A conversion is required when the VDI is missing (`vdi_mtime == None`) or
-/// when the raw image is strictly newer than the VDI. Equal timestamps mean the
-/// VDI is current (no fixed fudge factor / sleep is used).
-pub fn needs_vdi_conversion(img_mtime: SystemTime, vdi_mtime: Option<SystemTime>) -> bool {
-    match vdi_mtime {
-        None => true,
-        Some(vdi_mtime) => img_mtime > vdi_mtime,
-    }
+/// VirtualBox bumps the VDI file mtime on **every VM run**, so comparing the raw
+/// image's mtime against the VDI's own mtime is unreliable: after one boot the
+/// VDI always looks "newer" and is never regenerated, so the VM keeps running a
+/// stale disk. Freshness is therefore decided against a sidecar *stamp* that
+/// records exactly which raw image the VDI was last converted from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageStamp {
+    /// Raw image modification time, in whole seconds since the Unix epoch.
+    pub secs: u64,
+    /// Raw image size, in bytes.
+    pub size: u64,
 }
 
-/// Read the modification time of the raw image, failing clearly if it is absent
-/// (Case D: the caller must not silently continue with a stale VDI).
-fn raw_image_mtime(raw: &Path) -> Result<SystemTime> {
+/// Deterministic freshness policy for the raw image -> VDI relation.
+///
+/// A conversion is required unless the VDI exists *and* its stamp sidecar
+/// records exactly the current raw image.
+pub fn needs_vdi_conversion(
+    current: ImageStamp,
+    vdi_present: bool,
+    recorded: Option<ImageStamp>,
+) -> bool {
+    !(vdi_present && recorded == Some(current))
+}
+
+/// Sidecar that records the raw image the VDI was last converted from.
+fn vdi_stamp_path(vdi: &Path) -> PathBuf {
+    let mut s = vdi.as_os_str().to_owned();
+    s.push(".stamp");
+    PathBuf::from(s)
+}
+
+/// Identity of the raw image, failing clearly if it is absent (the caller must
+/// never silently continue with a stale VDI).
+fn image_stamp(raw: &Path) -> Result<ImageStamp> {
     let meta = std::fs::metadata(raw).with_context(|| {
         format!(
             "Raw disk image not found: {}\nRun 'neodev build --image' first.",
             raw.display()
         )
     })?;
-    meta.modified()
-        .with_context(|| format!("Cannot read modification time of {}", raw.display()))
+    let mtime = meta
+        .modified()
+        .with_context(|| format!("Cannot read modification time of {}", raw.display()))?;
+    let secs = mtime
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Ok(ImageStamp { secs, size: meta.len() })
 }
 
-/// Modification time of a path, or `None` when it does not exist / is unreadable.
-fn file_mtime(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+fn read_stamp(stamp: &Path) -> Option<ImageStamp> {
+    let text = std::fs::read_to_string(stamp).ok()?;
+    let mut it = text.split_whitespace();
+    Some(ImageStamp {
+        secs: it.next()?.parse().ok()?,
+        size: it.next()?.parse().ok()?,
+    })
+}
+
+fn write_stamp(stamp: &Path, s: ImageStamp) -> Result<()> {
+    std::fs::write(stamp, format!("{} {}\n", s.secs, s.size))
+        .with_context(|| format!("Cannot write VDI stamp {}", stamp.display()))
 }
 
 /// Single authoritative raw image -> VDI synchronization path.
@@ -197,20 +234,22 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 /// Owns the freshness policy and the attachment lifecycle so that `run`
 /// (`ensure_vm`) and `test` (`start_headless`) cannot drift apart. It:
 ///   1. fails clearly when the raw image is missing;
-///   2. converts when the VDI is missing or older than the raw image;
+///   2. converts when the VDI is missing or its stamp does not match the raw image;
 ///   3. refuses to touch the medium while the VM is running;
 ///   4. detaches the medium before replacing the VDI and re-attaches it after;
-///   5. verifies the resulting VDI exists and is at least as new as the raw image.
+///   5. verifies the resulting VDI exists and records the new stamp.
 pub fn ensure_vdi_current(vmcfg: &VmConfig) -> Result<VdiSyncOutcome> {
     let raw = &vmcfg.disk_image;
     let vdi = &vmcfg.disk_vdi;
 
     // Case D: the raw image must exist. Never fall back to a stale VDI.
-    let img_mtime = raw_image_mtime(raw)?;
+    let current = image_stamp(raw)?;
+    let stamp = vdi_stamp_path(vdi);
+    let recorded = read_stamp(&stamp);
+    let vdi_present = vdi.exists();
 
-    let vdi_mtime = file_mtime(vdi);
-    if !needs_vdi_conversion(img_mtime, vdi_mtime) {
-        // Case B: VDI is at least as new as the raw image.
+    if !needs_vdi_conversion(current, vdi_present, recorded) {
+        // Case B: the VDI was converted from exactly this raw image.
         return Ok(VdiSyncOutcome::Current);
     }
 
@@ -220,12 +259,12 @@ pub fn ensure_vdi_current(vmcfg: &VmConfig) -> Result<VdiSyncOutcome> {
         let status = vm_status(name)?;
         if matches!(status, VmStatus::Running | VmStatus::Paused) {
             anyhow::bail!(
-                "VM '{}' is {} and its disk image is stale (raw image '{}' is newer than VDI '{}').\n\
+                "VM '{}' is {} and its disk image is stale (VDI '{}' was not converted from the current '{}').\n\
                  Stop the VM before running so NeoDev can regenerate the VDI.",
                 name,
                 if status == VmStatus::Running { "running" } else { "paused" },
-                raw.display(),
-                vdi.display()
+                vdi.display(),
+                raw.display()
             );
         }
         // Case A/C with an existing VM: detach before touching the file so we
@@ -233,8 +272,8 @@ pub fn ensure_vdi_current(vmcfg: &VmConfig) -> Result<VdiSyncOutcome> {
         detach_medium(name, vdi)?;
     }
 
-    if vdi_mtime.is_some() {
-        println!("  Disk image is newer than VDI, re-converting...");
+    if vdi_present {
+        println!("  Disk image changed since last conversion, re-converting...");
     } else {
         println!("  VDI '{}' not found, creating...", vdi.display());
     }
@@ -242,23 +281,14 @@ pub fn ensure_vdi_current(vmcfg: &VmConfig) -> Result<VdiSyncOutcome> {
     // Case A/C/E: convert and fail loudly on any error.
     convert_to_vdi(raw, vdi)?;
 
-    // Post-conditions: the VDI must exist and be at least as new as the raw image.
-    let new_vdi_mtime = file_mtime(vdi).ok_or_else(|| {
-        anyhow::anyhow!(
+    if !vdi.exists() {
+        anyhow::bail!(
             "VDI '{}' does not exist after converting from '{}'",
             vdi.display(),
             raw.display()
-        )
-    })?;
-    if new_vdi_mtime < img_mtime {
-        anyhow::bail!(
-            "VDI '{}' is still older than raw image '{}' after conversion (vdi={:?}, img={:?})",
-            vdi.display(),
-            raw.display(),
-            new_vdi_mtime,
-            img_mtime
         );
     }
+    write_stamp(&stamp, current)?;
 
     if vm_present {
         attach_medium(name, vdi)?;
@@ -553,34 +583,39 @@ mod tests {
 
     // ---- VDI freshness policy (deterministic, no VirtualBox required) ----
 
-    fn t(secs: u64) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(secs)
+    fn stamp(secs: u64, size: u64) -> ImageStamp {
+        ImageStamp { secs, size }
     }
 
     #[test]
     fn missing_vdi_requires_conversion() {
-        assert!(needs_vdi_conversion(t(10), None));
+        assert!(needs_vdi_conversion(stamp(10, 100), false, None));
     }
 
     #[test]
-    fn newer_vdi_does_not_require_conversion() {
-        assert!(!needs_vdi_conversion(t(10), Some(t(20))));
+    fn missing_stamp_requires_conversion() {
+        assert!(needs_vdi_conversion(stamp(10, 100), true, None));
     }
 
     #[test]
-    fn equal_timestamps_do_not_require_conversion() {
-        assert!(!needs_vdi_conversion(t(10), Some(t(10))));
+    fn matching_stamp_does_not_require_conversion() {
+        assert!(!needs_vdi_conversion(stamp(10, 100), true, Some(stamp(10, 100))));
     }
 
     #[test]
-    fn newer_img_requires_conversion() {
-        assert!(needs_vdi_conversion(t(30), Some(t(20))));
+    fn changed_mtime_requires_conversion() {
+        assert!(needs_vdi_conversion(stamp(30, 100), true, Some(stamp(10, 100))));
+    }
+
+    #[test]
+    fn changed_size_requires_conversion() {
+        assert!(needs_vdi_conversion(stamp(10, 200), true, Some(stamp(10, 100))));
     }
 
     #[test]
     fn missing_raw_image_is_a_clear_error() {
         let dir = unique_temp_dir("missing-img");
-        let err = raw_image_mtime(&dir.join("does-not-exist.img")).unwrap_err();
+        let err = image_stamp(&dir.join("does-not-exist.img")).unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("not found"), "unexpected error: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
