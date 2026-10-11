@@ -552,7 +552,11 @@ mod tests {
             let parts: Vec<&str> = line.split(':').collect();
             if parts.len() < 2 { return None; }
             let iface = parts[1].trim().to_string();
-            if iface == "lo" { return None; }
+            // Mirror the exclusions of `detect_bridge_interface` so both sets agree.
+            if iface == "lo" || iface.starts_with("tap") || iface.starts_with("docker")
+                || iface.starts_with("vbox") || iface.starts_with("virbr") || iface.starts_with("br-") {
+                return None;
+            }
             let up = std::fs::read_to_string(format!("/sys/class/net/{}/operstate", iface)).map(|s| s.trim() == "up").unwrap_or(false);
             let car = std::fs::read_to_string(format!("/sys/class/net/{}/carrier", iface)).map(|s| s.trim() == "1").unwrap_or(false);
             if up && car { Some(iface) } else { None }
@@ -561,7 +565,15 @@ mod tests {
         if !active_eth.is_empty() {
             let selected = detect_bridge_interface();
             assert!(!selected.is_empty());
-            assert_ne!(selected, "eth0", "should detect real interface, not fallback");
+            // With a live interface present, detection must pick one of them rather
+            // than the hardcoded default. Comparing against the literal "eth0" was
+            // wrong: on some hosts — GitHub Actions runners included — the live
+            // interface is itself named eth0, so the old assertion failed even
+            // though detection had worked.
+            assert!(
+                active_eth.contains(&selected),
+                "detection must pick a live interface, not the hardcoded fallback: selected {selected}, live {active_eth:?}"
+            );
         }
     }
 
