@@ -4,6 +4,14 @@
 
 ### Added
 
+- **GitHub Actions CI (#38).** Pull requests and pushes to `main` now run
+  `cargo test --locked`, `cargo clippy --all-targets --locked -- -D warnings` and
+  `cargo build --release --locked` on stable Rust with cached artifacts. The five
+  clippy warnings that would have broken the new gate are fixed as well: unused
+  `UNIX_EPOCH` import, manual `div_ceil`, needless borrow, needless range loop,
+  and a complex tuple type in `image.rs` factored into `FreeRegion` /
+  `FreelistPlan` aliases.
+
 - **Image builder: package `snapshot.nxe` (#569).** Add `snapshot` to the
   `System/Tools` list so the NeoFS v2 snapshot command is installed at
   `C:\System\Tools\snapshot.nxe` (NeoDOS #569).
