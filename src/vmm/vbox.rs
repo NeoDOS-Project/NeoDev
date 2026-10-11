@@ -535,7 +535,6 @@ fn has_ip_address(iface: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::UNIX_EPOCH;
 
     #[test]
     fn test_detect_bridge_interface_not_empty() {

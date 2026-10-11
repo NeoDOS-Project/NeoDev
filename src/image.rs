@@ -23,19 +23,25 @@ const PERM_X: u16 = 0x0004;
 /// `(4096 - 8 header - 8 next_lba) / 12`.
 const REGIONS_PER_NODE: usize = 340;
 
+/// One NE2 free-list region: `(start_lba, length_in_sectors)`.
+type FreeRegion = (u64, u32);
+
+/// The plan produced by [`plan_freelist`]: `(node_lbas, adjusted_regions)`.
+type FreelistPlan = (Vec<u64>, Vec<FreeRegion>);
+
 /// Plan the free-list node chain.
 ///
 /// The first node is placed at `first_lba`. If the region list needs more than
 /// one node, the extra nodes are reserved from the front of the first free
 /// region (which is shrunk accordingly). Returns `(node_lbas, adjusted_regions)`.
 fn plan_freelist(
-    mut free_regions: Vec<(u64, u32)>,
+    mut free_regions: Vec<FreeRegion>,
     first_lba: u64,
-) -> Result<(Vec<u64>, Vec<(u64, u32)>)> {
+) -> Result<FreelistPlan> {
     if free_regions.is_empty() {
         return Ok((Vec::new(), free_regions));
     }
-    let num_nodes = (free_regions.len() + REGIONS_PER_NODE - 1) / REGIONS_PER_NODE;
+    let num_nodes = free_regions.len().div_ceil(REGIONS_PER_NODE);
     let mut node_lbas = vec![first_lba];
     let extra = num_nodes - 1;
     if extra > 0 {
@@ -552,7 +558,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         ("net.nxl", "net.nxl"),
     ];
     let mut nxl_files: Vec<(String, std::path::PathBuf)> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&root) {
+    if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_file() && p.extension().map(|e| e == "nxl").unwrap_or(false) {
@@ -997,7 +1003,9 @@ mod tests {
         assert!(ikeys[0].is_empty());
         // Leaves hold all 60 keys in order.
         let mut all = Vec::new();
-        for l in 0..chunks.len() { all.extend(parse_leaf_keys(&nodes[l])); }
+        for node in nodes.iter().take(chunks.len()) {
+            all.extend(parse_leaf_keys(node));
+        }
         assert_eq!(all.len(), 60);
         let mut sorted = all.clone();
         sorted.sort();
