@@ -524,7 +524,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         "neoshell", "neoinit", "cmdtest", "cd", "corehelp",
         "datetime", "neomem", "echo", "label",
         "coretype", "corecls", "corecopy", "coredel",
-        "coreren", "coremd", "corerd", "drives", "ps", "keyb", "coredir",
+        "coreren", "coremd", "corerd", "drives", "ps", "coredir",
         "poweroff", "colors", "neokey",
         "nxres", "nxlocale", "nxverify", "ping", "hostname",
     ];
@@ -585,7 +585,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         println!("  NXL packed: /System/Libraries/{}", dst);
     }
 
-    let kbd_layouts = &["US", "Spanish"];
+    let kbd_layouts = &["en-US", "es-ES"];
     for layout_name in kbd_layouts {
         let p = root.join("data/keyboard").join(format!("{}.kbd", layout_name));
         if p.exists() {
