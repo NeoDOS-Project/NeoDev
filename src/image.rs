@@ -585,6 +585,8 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         println!("  NXL packed: /System/Libraries/{}", dst);
     }
 
+    // Enabled layouts shipped in /System/Keyboard. Generate all locales with
+    // scripts/gen-keyboard-layouts.sh; more are enabled once #709 is fixed.
     let kbd_layouts = &["en-US", "es-ES"];
     for layout_name in kbd_layouts {
         let p = root.join("data/keyboard").join(format!("{}.kbd", layout_name));
