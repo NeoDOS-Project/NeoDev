@@ -45,7 +45,15 @@ headless = false          # default display mode for the VirtualBox backend
 vrde = false              # enable VirtualBox's RDP server (VRDE)
 vrde_port = 5000
 vrde_address = "0.0.0.0"
+vrde_certificate = "/etc/vrde/server.crt"   # optional: RDP TLS certificate (PEM)
+vrde_private_key = "/etc/vrde/server.key"   # optional: RDP TLS private key (PEM)
 ```
+
+`vrde_certificate` and `vrde_private_key` must be set together; both are applied
+as VirtualBox `Security/ServerCertificate` and `Security/ServerPrivateKey` VRDE
+properties. Without them VRDE has no TLS certificate and modern RDP clients
+reject the connection (`SSL_CERT_NOT_ON_SERVER`). Generate a self-signed pair
+with `winpr-makecert -format crt -n "CN=NeoDOS" server`.
 
 ### How CLI flags combine with the config
 

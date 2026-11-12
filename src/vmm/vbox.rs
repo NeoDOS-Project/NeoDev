@@ -450,15 +450,35 @@ fn attach_medium(name: &str, vdi: &Path) -> Result<()> {
 
 /// Arguments for `VBoxManage modifyvm` that enable VRDE, or an empty list when
 /// VRDE is disabled (leaving any manually configured value untouched).
-fn vrde_args(cfg: &Config) -> Vec<String> {
+///
+/// `Security/ServerCertificate` and `Security/ServerPrivateKey` must be set
+/// together, otherwise VirtualBox rejects the TLS endpoint at connect time.
+fn vrde_args(cfg: &Config) -> Result<Vec<String>> {
     if !cfg.vbox_vrde {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    vec![
+    if cfg.vbox_vrde_certificate.is_some() != cfg.vbox_vrde_private_key.is_some() {
+        anyhow::bail!(
+            "[virtualbox] vrde_certificate and vrde_private_key must be configured together"
+        );
+    }
+
+    let mut args = vec![
         "--vrde".into(), "on".into(),
         "--vrdeport".into(), cfg.vbox_vrde_port.to_string(),
         "--vrdeaddress".into(), cfg.vbox_vrde_address.clone(),
-    ]
+    ];
+    if let Some(cert) = &cfg.vbox_vrde_certificate {
+        let key = cfg
+            .vbox_vrde_private_key
+            .as_ref()
+            .expect("presence checked above");
+        args.push("--vrde-property".into());
+        args.push(format!("Security/ServerCertificate={}", cert.display()));
+        args.push("--vrde-property".into());
+        args.push(format!("Security/ServerPrivateKey={}", key.display()));
+    }
+    Ok(args)
 }
 
 fn modify_vm(cfg: &Config, name: &str, vmcfg: &VmConfig) -> Result<()> {
@@ -471,7 +491,7 @@ fn modify_vm(cfg: &Config, name: &str, vmcfg: &VmConfig) -> Result<()> {
 
     // VRDE (VirtualBox's built-in RDP server) is host-level config: apply it
     // only when enabled so a manually configured VM keeps its settings.
-    let vrde = vrde_args(cfg);
+    let vrde = vrde_args(cfg)?;
     if !vrde.is_empty() {
         let status = Command::new("VBoxManage")
             .args(["modifyvm", name])
@@ -567,7 +587,7 @@ mod tests {
     #[test]
     fn vrde_args_are_empty_when_disabled() {
         let cfg = Config::default(Path::new("/tmp/neodos"));
-        assert!(vrde_args(&cfg).is_empty());
+        assert!(vrde_args(&cfg).unwrap().is_empty());
     }
 
     #[test]
@@ -577,9 +597,29 @@ mod tests {
         cfg.vbox_vrde_port = 5001;
         cfg.vbox_vrde_address = "127.0.0.1".into();
         assert_eq!(
-            vrde_args(&cfg),
+            vrde_args(&cfg).unwrap(),
             vec!["--vrde", "on", "--vrdeport", "5001", "--vrdeaddress", "127.0.0.1"]
         );
+    }
+
+    #[test]
+    fn vrde_args_carry_tls_certificate_and_key() {
+        let mut cfg = Config::default(Path::new("/tmp/neodos"));
+        cfg.vbox_vrde = true;
+        cfg.vbox_vrde_certificate = Some(PathBuf::from("/etc/vrde/server.crt"));
+        cfg.vbox_vrde_private_key = Some(PathBuf::from("/etc/vrde/server.key"));
+        let args = vrde_args(&cfg).unwrap();
+        assert!(args.contains(&"Security/ServerCertificate=/etc/vrde/server.crt".to_string()));
+        assert!(args.contains(&"Security/ServerPrivateKey=/etc/vrde/server.key".to_string()));
+        assert_eq!(args.iter().filter(|a| *a == "--vrde-property").count(), 2);
+    }
+
+    #[test]
+    fn vrde_args_reject_unpaired_tls_material() {
+        let mut cfg = Config::default(Path::new("/tmp/neodos"));
+        cfg.vbox_vrde = true;
+        cfg.vbox_vrde_certificate = Some(PathBuf::from("/etc/vrde/server.crt"));
+        assert!(vrde_args(&cfg).is_err());
     }
 
     #[test]

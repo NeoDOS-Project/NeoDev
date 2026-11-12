@@ -26,3 +26,5 @@ headless = false        # same as passing --headless
 vrde = false            # enable the built-in RDP server
 vrde_port = 5000
 vrde_address = "0.0.0.0"
+# vrde_certificate = "/path/to/server.crt"   # optional PEM cert for RDP TLS
+# vrde_private_key = "/path/to/server.key"    # optional PEM key for RDP TLS

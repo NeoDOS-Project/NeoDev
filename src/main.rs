@@ -594,6 +594,16 @@ fn cmd_config(cfg: &config::Config) -> Result<()> {
     } else {
         "off".to_string()
     });
+    if cfg.vbox_vrde_certificate.is_some() || cfg.vbox_vrde_private_key.is_some() {
+        let show = |p: &Option<std::path::PathBuf>| {
+            p.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unset".into())
+        };
+        println!(
+            "  VBox VRDE TLS:     {} / {}",
+            show(&cfg.vbox_vrde_certificate),
+            show(&cfg.vbox_vrde_private_key)
+        );
+    }
 
     report::print_discovery_report(cfg)?;
     Ok(())

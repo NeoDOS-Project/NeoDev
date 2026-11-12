@@ -24,6 +24,8 @@ pub struct Config {
     pub vbox_vrde: bool,
     pub vbox_vrde_port: u16,
     pub vbox_vrde_address: String,
+    pub vbox_vrde_certificate: Option<PathBuf>,
+    pub vbox_vrde_private_key: Option<PathBuf>,
 }
 
 impl Config {
@@ -95,6 +97,8 @@ impl Config {
             vbox_vrde: false,
             vbox_vrde_port: 5000,
             vbox_vrde_address: "0.0.0.0".into(),
+            vbox_vrde_certificate: None,
+            vbox_vrde_private_key: None,
         }
     }
 
@@ -124,6 +128,8 @@ impl Config {
             if let Some(val) = v.vrde { self.vbox_vrde = val; }
             if let Some(val) = v.vrde_port { self.vbox_vrde_port = val; }
             if let Some(val) = v.vrde_address { self.vbox_vrde_address = val; }
+            if let Some(val) = v.vrde_certificate { self.vbox_vrde_certificate = Some(val); }
+            if let Some(val) = v.vrde_private_key { self.vbox_vrde_private_key = Some(val); }
         }
     }
 }
@@ -168,6 +174,8 @@ struct VirtualBoxConfig {
     vrde: Option<bool>,
     vrde_port: Option<u16>,
     vrde_address: Option<String>,
+    vrde_certificate: Option<PathBuf>,
+    vrde_private_key: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -190,12 +198,22 @@ mod tests {
             vrde = true
             vrde_port = 5001
             vrde_address = "127.0.0.1"
+            vrde_certificate = "/etc/vrde/server.crt"
+            vrde_private_key = "/etc/vrde/server.key"
             "#,
         );
         assert!(cfg.vbox_headless);
         assert!(cfg.vbox_vrde);
         assert_eq!(cfg.vbox_vrde_port, 5001);
         assert_eq!(cfg.vbox_vrde_address, "127.0.0.1");
+        assert_eq!(
+            cfg.vbox_vrde_certificate.as_deref(),
+            Some(Path::new("/etc/vrde/server.crt"))
+        );
+        assert_eq!(
+            cfg.vbox_vrde_private_key.as_deref(),
+            Some(Path::new("/etc/vrde/server.key"))
+        );
     }
 
     #[test]
@@ -205,6 +223,8 @@ mod tests {
         assert!(!cfg.vbox_vrde);
         assert_eq!(cfg.vbox_vrde_port, 5000);
         assert_eq!(cfg.vbox_vrde_address, "0.0.0.0");
+        assert_eq!(cfg.vbox_vrde_certificate, None);
+        assert_eq!(cfg.vbox_vrde_private_key, None);
     }
 
     #[test]

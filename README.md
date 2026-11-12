@@ -71,7 +71,11 @@ headless = false
 vrde = false
 vrde_port = 5000
 vrde_address = "0.0.0.0"
+vrde_certificate = "/etc/vrde/server.crt"
+vrde_private_key = "/etc/vrde/server.key"
 ```
+`vrde_certificate` and `vrde_private_key` (PEM) are optional, but must be set
+together; they enable TLS for the RDP endpoint.
 
 ## Locating NeoDOS
 
