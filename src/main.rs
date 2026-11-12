@@ -106,9 +106,9 @@ enum Commands {
         /// Storage controller: ahci, ata, nvme, virtio
         #[arg(long, default_value = "ahci")]
         storage: String,
-        /// Network mode: user, tap, bridge
-        #[arg(long, default_value = "bridge")]
-        net: String,
+        /// Network mode: user, tap, bridge, none (default: [vm] network)
+        #[arg(long)]
+        net: Option<String>,
         /// Enable KVM acceleration (QEMU only)
         #[arg(long)]
         kvm: bool,
@@ -118,9 +118,10 @@ enum Commands {
         /// BDM mode (persistent OVMF vars, QEMU only)
         #[arg(long)]
         bdm: bool,
-        /// Headless mode (no display)
-        #[arg(long)]
-        headless: bool,
+        /// Headless mode (no display). Overrides the backend config; use
+        /// `--headless=false` to force a GUI when the config says headless.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+        headless: Option<bool>,
         /// Serial output to file instead of stdio
         #[arg(long)]
         serial: Option<String>,
@@ -271,8 +272,8 @@ enum VmAction {
     Start {
         #[arg(long)]
         backend: Option<String>,
-        #[arg(long)]
-        headless: bool,
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+        headless: Option<bool>,
         #[arg(long)]
         net: Option<String>,
     },
@@ -318,7 +319,7 @@ fn main() -> Result<()> {
         Commands::Image { output, esp_size, neodos_size, blocks, label, no_build, enable_tests, enable_network_test } =>
             cmd_image(&cfg, &disc, output, *esp_size, *neodos_size, *blocks, label, *no_build, *enable_tests, *enable_network_test),
         Commands::Run { storage, net, kvm, gdb, bdm, headless, serial, backend } =>
-            cmd_run(&cfg, storage, net, *kvm, *gdb, *bdm, *headless, serial.as_deref(), backend.as_deref()),
+            cmd_run(&cfg, storage, net.as_deref(), *kvm, *gdb, *bdm, *headless, serial.as_deref(), backend.as_deref()),
         Commands::Test { storage, kvm, iterations, timeout, backend } =>
             cmd_test(&cfg, storage, *kvm, *iterations, *timeout, backend.as_deref()),
         Commands::Dhcp { backend, timeout } =>
@@ -462,8 +463,8 @@ fn cmd_image(
 #[allow(clippy::too_many_arguments)] // CLI dispatch: one flag per argument
 fn cmd_run(
     cfg: &config::Config,
-    storage_str: &str, net_str: &str, _kvm: bool, gdb: bool, _bdm: bool,
-    headless: bool, serial: Option<&str>, backend: Option<&str>,
+    storage_str: &str, net_str: Option<&str>, kvm: bool, gdb: bool, bdm: bool,
+    headless: Option<bool>, serial: Option<&str>, backend: Option<&str>,
 ) -> Result<()> {
     let storage = match storage_str {
         "ahci" => run::StorageMode::Ahci,
@@ -473,27 +474,48 @@ fn cmd_run(
         _ => anyhow::bail!("Unknown storage mode: {}. Use: ahci, ata, nvme, virtio", storage_str),
     };
 
-    let net = match net_str {
-        "user" => run::NetMode::User,
-        "tap" => run::NetMode::Tap,
-        "bridge" => run::NetMode::Bridge,
-        _ => anyhow::bail!("Unknown net mode: {}. Use: user, tap, bridge", net_str),
-    };
+    // CLI boolean flags are overrides: they can only turn a feature on, so the
+    // config file keeps working as the default source of truth.
+    let mut cfg = cfg.clone();
+    if kvm {
+        cfg.qemu_kvm = true;
+    }
+    if bdm {
+        cfg.qemu_bdm = true;
+    }
+
+    let net = parse_net_mode(net_str.unwrap_or(&cfg.vm_network))?;
 
     let actual_backend = backend.unwrap_or(&cfg.vm_backend);
 
     let opts = run::RunOptions {
-        storage, net, gdb, headless,
+        storage, net, gdb, headless: effective_headless(headless, &cfg, actual_backend),
         serial_file: serial.map(|s| s.to_string()),
         backend: actual_backend.to_string(),
     };
 
-    run::run_vm(cfg, &opts)
+    run::run_vm(&cfg, &opts)
+}
+
+fn parse_net_mode(net_str: &str) -> Result<run::NetMode> {
+    match net_str {
+        "user" | "nat" => Ok(run::NetMode::User),
+        "tap" => Ok(run::NetMode::Tap),
+        "bridge" | "bridged" => Ok(run::NetMode::Bridge),
+        "none" | "disabled" => Ok(run::NetMode::None),
+        _ => anyhow::bail!("Unknown net mode: {}. Use: user, tap, bridge", net_str),
+    }
+}
+
+/// Resolve the display mode: an explicit CLI value always wins; otherwise the
+/// `[virtualbox] headless` setting applies to the VirtualBox backend only.
+fn effective_headless(cli: Option<bool>, cfg: &config::Config, backend: &str) -> bool {
+    cli.unwrap_or(backend == "virtualbox" && cfg.vbox_headless)
 }
 
 fn cmd_test(
     cfg: &config::Config,
-    storage_str: &str, _kvm: bool, iterations: u32, timeout: u64, backend: Option<&str>,
+    storage_str: &str, kvm: bool, iterations: u32, timeout: u64, backend: Option<&str>,
 ) -> Result<()> {
     use vmm::StorageMode;
     let storage = match storage_str {
@@ -503,6 +525,10 @@ fn cmd_test(
         _ => anyhow::bail!("Unknown storage mode: {}. Use: ahci, ata, virtio", storage_str),
     };
 
+    let mut cfg = cfg.clone();
+    if kvm {
+        cfg.qemu_kvm = true;
+    }
     let actual_backend = backend.unwrap_or(&cfg.vm_backend);
 
     let opts = test_::TestOptions {
@@ -510,7 +536,7 @@ fn cmd_test(
         backend: actual_backend.to_string(),
     };
 
-    let result = test_::run_tests(cfg, &opts)?;
+    let result = test_::run_tests(&cfg, &opts)?;
     if !result.kernel_tests_passed {
         anyhow::bail!("Kernel tests failed");
     }
@@ -562,6 +588,12 @@ fn cmd_config(cfg: &config::Config) -> Result<()> {
     println!("  VM network:        {}", cfg.vm_network);
     println!("  OVMF code:         {}", cfg.ovmf_code.display());
     println!("  OVMF vars:         {}", cfg.ovmf_vars_template.display());
+    println!("  VBox headless:     {}", cfg.vbox_headless);
+    println!("  VBox VRDE:         {}", if cfg.vbox_vrde {
+        format!("on ({}:{})", cfg.vbox_vrde_address, cfg.vbox_vrde_port)
+    } else {
+        "off".to_string()
+    });
 
     report::print_discovery_report(cfg)?;
     Ok(())
@@ -726,7 +758,10 @@ fn cmd_vm(cfg: &config::Config, action: &VmAction) -> Result<()> {
             let b = vmm::create_backend(&actual_backend)?;
             b.check_prerequisites(cfg)?;
             let vmcfg = vmm::vmcfg_from_config_net(cfg, net.as_deref());
-            let vmcfg = vmm::VmConfig { headless: *headless, ..vmcfg };
+            let vmcfg = vmm::VmConfig {
+                headless: effective_headless(*headless, cfg, &actual_backend),
+                ..vmcfg
+            };
             let _ = b.stop(cfg, &vmcfg);
             std::thread::sleep(std::time::Duration::from_millis(500));
             b.ensure_vm(cfg, &vmcfg)?;
@@ -772,5 +807,40 @@ fn cmd_vm(cfg: &config::Config, action: &VmAction) -> Result<()> {
             println!("{} Deleting VM (backend: {})", "[*]".bold().cyan(), actual_backend);
             b.delete_vm(cfg, &vmcfg)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_vbox_headless(headless: bool) -> config::Config {
+        let mut cfg = config::Config::default(Path::new("/tmp/neodos"));
+        cfg.vbox_headless = headless;
+        cfg
+    }
+
+    #[test]
+    fn net_mode_accepts_config_spellings() {
+        assert_eq!(parse_net_mode("user").unwrap(), run::NetMode::User);
+        assert_eq!(parse_net_mode("nat").unwrap(), run::NetMode::User);
+        assert_eq!(parse_net_mode("bridge").unwrap(), run::NetMode::Bridge);
+        assert_eq!(parse_net_mode("bridged").unwrap(), run::NetMode::Bridge);
+        assert_eq!(parse_net_mode("none").unwrap(), run::NetMode::None);
+        assert!(parse_net_mode("bogus").is_err());
+    }
+
+    #[test]
+    fn explicit_headless_flag_wins_over_config() {
+        let cfg = cfg_with_vbox_headless(true);
+        assert!(!effective_headless(Some(false), &cfg, "virtualbox"));
+        assert!(effective_headless(Some(true), &cfg, "qemu"));
+    }
+
+    #[test]
+    fn config_headless_only_applies_to_virtualbox() {
+        let cfg = cfg_with_vbox_headless(true);
+        assert!(effective_headless(None, &cfg, "virtualbox"));
+        assert!(!effective_headless(None, &cfg, "qemu"));
     }
 }

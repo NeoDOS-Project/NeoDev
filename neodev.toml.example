@@ -19,3 +19,10 @@ kvm = false
 bdm = false
 ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"
 ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS.fd"
+
+# VirtualBox backend settings (ignored by QEMU)
+[virtualbox]
+headless = false        # same as passing --headless
+vrde = false            # enable the built-in RDP server
+vrde_port = 5000
+vrde_address = "0.0.0.0"

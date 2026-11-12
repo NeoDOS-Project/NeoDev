@@ -38,7 +38,7 @@ impl HypervisorBackend for VirtualBoxBackend {
         Ok(())
     }
 
-    fn ensure_vm(&self, _cfg: &Config, vmcfg: &VmConfig) -> Result<()> {
+    fn ensure_vm(&self, cfg: &Config, vmcfg: &VmConfig) -> Result<()> {
         let name = &vmcfg.name;
         let _ = vm_poweroff(name);
         std::thread::sleep(Duration::from_millis(500));
@@ -50,12 +50,12 @@ impl HypervisorBackend for VirtualBoxBackend {
 
         let vdi_path = &vmcfg.disk_vdi;
 
-        if vm_exists(name) { println!("  VM '{}' already exists, reconfiguring", name); modify_vm(name, vmcfg)?; attach_storage(name, vdi_path)?; return Ok(()); }
+        if vm_exists(name) { println!("  VM '{}' already exists, reconfiguring", name); modify_vm(cfg, name, vmcfg)?; attach_storage(name, vdi_path)?; return Ok(()); }
 
         println!("  Creating VirtualBox VM '{}'...", name);
         let status = Command::new("VBoxManage").args(["createvm", "--name", name, "--ostype", "Linux_64", "--register"]).status().context("Failed to create VM")?;
         if !status.success() { anyhow::bail!("VBoxManage createvm failed"); }
-        modify_vm(name, vmcfg)?;
+        modify_vm(cfg, name, vmcfg)?;
         attach_storage(name, vdi_path)?;
         println!("  VM '{}' created successfully", name);
         Ok(())
@@ -448,13 +448,41 @@ fn attach_medium(name: &str, vdi: &Path) -> Result<()> {
     Ok(())
 }
 
-fn modify_vm(name: &str, vmcfg: &VmConfig) -> Result<()> {
+/// Arguments for `VBoxManage modifyvm` that enable VRDE, or an empty list when
+/// VRDE is disabled (leaving any manually configured value untouched).
+fn vrde_args(cfg: &Config) -> Vec<String> {
+    if !cfg.vbox_vrde {
+        return Vec::new();
+    }
+    vec![
+        "--vrde".into(), "on".into(),
+        "--vrdeport".into(), cfg.vbox_vrde_port.to_string(),
+        "--vrdeaddress".into(), cfg.vbox_vrde_address.clone(),
+    ]
+}
+
+fn modify_vm(cfg: &Config, name: &str, vmcfg: &VmConfig) -> Result<()> {
     Command::new("VBoxManage").args(["modifyvm", name, "--memory", &vmcfg.memory_mb.to_string()]).status()?;
     Command::new("VBoxManage").args(["modifyvm", name, "--cpus", &vmcfg.cpus.to_string()]).status()?;
     if vmcfg.efi { Command::new("VBoxManage").args(["modifyvm", name, "--firmware", "efi"]).status()?; }
     Command::new("VBoxManage").args(["modifyvm", name, "--chipset", "ich9"]).status()?;
 
     configure_serial(name, vmcfg)?;
+
+    // VRDE (VirtualBox's built-in RDP server) is host-level config: apply it
+    // only when enabled so a manually configured VM keeps its settings.
+    let vrde = vrde_args(cfg);
+    if !vrde.is_empty() {
+        let status = Command::new("VBoxManage")
+            .args(["modifyvm", name])
+            .args(&vrde)
+            .status()
+            .context("Failed to configure VRDE")?;
+        if !status.success() {
+            anyhow::bail!("Failed to configure VRDE on VM '{}'", name);
+        }
+        println!("  VRDE (RDP):    {}:{}", cfg.vbox_vrde_address, cfg.vbox_vrde_port);
+    }
 
     match vmcfg.network {
         NetworkMode::User => { Command::new("VBoxManage").args(["modifyvm", name, "--nic1", "nat", "--nictype1", "82540EM", "--cableconnected1", "on"]).status()?; }
@@ -535,6 +563,24 @@ fn has_ip_address(iface: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vrde_args_are_empty_when_disabled() {
+        let cfg = Config::default(Path::new("/tmp/neodos"));
+        assert!(vrde_args(&cfg).is_empty());
+    }
+
+    #[test]
+    fn vrde_args_enable_and_carry_endpoint() {
+        let mut cfg = Config::default(Path::new("/tmp/neodos"));
+        cfg.vbox_vrde = true;
+        cfg.vbox_vrde_port = 5001;
+        cfg.vbox_vrde_address = "127.0.0.1".into();
+        assert_eq!(
+            vrde_args(&cfg),
+            vec!["--vrde", "on", "--vrdeport", "5001", "--vrdeaddress", "127.0.0.1"]
+        );
+    }
 
     #[test]
     fn test_detect_bridge_interface_not_empty() {

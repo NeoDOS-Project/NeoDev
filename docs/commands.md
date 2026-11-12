@@ -39,10 +39,13 @@ neodev image [--output <path>] [--esp-size <MB>] [--neodos-size <MB>]
 ## Run
 
 ```text
-neodev run [--storage ahci|ata|nvme|virtio] [--net user|tap|bridge]
-           [--kvm] [--gdb] [--bdm] [--headless] [--serial <file>]
+neodev run [--storage ahci|ata|nvme|virtio] [--net user|tap|bridge|none]
+           [--kvm] [--gdb] [--bdm] [--headless[=true|false]] [--serial <file>]
            [--backend qemu|virtualbox]
 ```
+
+`--net` defaults to `[vm] network`; `--headless` defaults to
+`[virtualbox] headless` for VirtualBox and GUI for QEMU.
 
 ## Test
 
@@ -68,7 +71,7 @@ neodev clean [--all] [--kernel] [--bootloader] [--userbin]
 ## VM Management
 
 ```text
-neodev vm start   [--backend qemu|virtualbox] [--headless] [--net nat|bridged]
+neodev vm start   [--backend qemu|virtualbox] [--headless[=true|false]] [--net nat|bridged]
 neodev vm stop    [--backend qemu|virtualbox]
 neodev vm reset   [--backend qemu|virtualbox]
 neodev vm status  [--backend qemu|virtualbox]

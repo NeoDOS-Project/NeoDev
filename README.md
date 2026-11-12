@@ -65,6 +65,12 @@ network = "bridged"
 kvm = false
 ovmf_code = "/usr/share/OVMF/OVMF_CODE.fd"
 ovmf_vars_template = "/usr/share/OVMF/OVMF_VARS.fd"
+
+[virtualbox]
+headless = false
+vrde = false
+vrde_port = 5000
+vrde_address = "0.0.0.0"
 ```
 
 ## Locating NeoDOS

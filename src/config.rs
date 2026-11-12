@@ -20,6 +20,10 @@ pub struct Config {
     pub kernel_target: String,
     pub bootloader_target: String,
     pub debug: bool,
+    pub vbox_headless: bool,
+    pub vbox_vrde: bool,
+    pub vbox_vrde_port: u16,
+    pub vbox_vrde_address: String,
 }
 
 impl Config {
@@ -87,6 +91,10 @@ impl Config {
             kernel_target: "x86_64-unknown-none".into(),
             bootloader_target: "x86_64-unknown-uefi".into(),
             debug: false,
+            vbox_headless: false,
+            vbox_vrde: false,
+            vbox_vrde_port: 5000,
+            vbox_vrde_address: "0.0.0.0".into(),
         }
     }
 
@@ -111,6 +119,12 @@ impl Config {
             if let Some(val) = q.ovmf_code { self.ovmf_code = val; }
             if let Some(val) = q.ovmf_vars_template { self.ovmf_vars_template = val; }
         }
+        if let Some(v) = file.virtualbox {
+            if let Some(val) = v.headless { self.vbox_headless = val; }
+            if let Some(val) = v.vrde { self.vbox_vrde = val; }
+            if let Some(val) = v.vrde_port { self.vbox_vrde_port = val; }
+            if let Some(val) = v.vrde_address { self.vbox_vrde_address = val; }
+        }
     }
 }
 
@@ -119,6 +133,7 @@ struct ConfigFile {
     project: Option<ProjectConfig>,
     vm: Option<VmConfig>,
     qemu: Option<QemuConfig>,
+    virtualbox: Option<VirtualBoxConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,4 +160,67 @@ struct QemuConfig {
     bdm: Option<bool>,
     ovmf_code: Option<PathBuf>,
     ovmf_vars_template: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VirtualBoxConfig {
+    headless: Option<bool>,
+    vrde: Option<bool>,
+    vrde_port: Option<u16>,
+    vrde_address: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn merged(toml_str: &str) -> Config {
+        let mut cfg = Config::default(Path::new("/tmp/neodos"));
+        let file: ConfigFile = toml::from_str(toml_str).expect("valid TOML");
+        cfg.merge_file(file);
+        cfg
+    }
+
+    #[test]
+    fn virtualbox_section_is_parsed() {
+        let cfg = merged(
+            r#"
+            [virtualbox]
+            headless = true
+            vrde = true
+            vrde_port = 5001
+            vrde_address = "127.0.0.1"
+            "#,
+        );
+        assert!(cfg.vbox_headless);
+        assert!(cfg.vbox_vrde);
+        assert_eq!(cfg.vbox_vrde_port, 5001);
+        assert_eq!(cfg.vbox_vrde_address, "127.0.0.1");
+    }
+
+    #[test]
+    fn virtualbox_defaults_are_preserved_when_section_missing() {
+        let cfg = merged("[vm]\nbackend = \"virtualbox\"\n");
+        assert!(!cfg.vbox_headless);
+        assert!(!cfg.vbox_vrde);
+        assert_eq!(cfg.vbox_vrde_port, 5000);
+        assert_eq!(cfg.vbox_vrde_address, "0.0.0.0");
+    }
+
+    #[test]
+    fn vm_section_overrides_defaults() {
+        let cfg = merged(
+            r#"
+            [vm]
+            backend = "virtualbox"
+            memory = 1024
+            cpus = 4
+            network = "user"
+            "#,
+        );
+        assert_eq!(cfg.vm_backend, "virtualbox");
+        assert_eq!(cfg.vm_memory_mb, 1024);
+        assert_eq!(cfg.vm_cpus, 4);
+        assert_eq!(cfg.vm_network, "user");
+    }
 }

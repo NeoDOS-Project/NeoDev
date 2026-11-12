@@ -10,7 +10,7 @@ pub enum StorageMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NetMode {
-    User, Tap, Bridge,
+    User, Tap, Bridge, None,
 }
 
 pub struct RunOptions {
@@ -42,6 +42,7 @@ pub fn run_vm(cfg: &Config, opts: &RunOptions) -> Result<()> {
         network: match opts.net {
             NetMode::User => vmm::NetworkMode::User,
             NetMode::Tap | NetMode::Bridge => vmm::NetworkMode::Bridged,
+            NetMode::None => vmm::NetworkMode::None,
         },
         headless: opts.headless,
         gdb: opts.gdb,
