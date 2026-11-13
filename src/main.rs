@@ -59,12 +59,12 @@ enum Commands {
         /// Generate disk image after build
         #[arg(long)]
         image: bool,
-        /// NeoDOS FS size in MB (default: 100)
-        #[arg(long, default_value_t = 100)]
-        neodos_size: u64,
-        /// NE2 filesystem blocks (default: 25600 = 100 MB at 4 KB/block)
-        #[arg(long, default_value_t = 25600)]
-        neodos_blocks: u64,
+        /// NeoDOS partition size in MB (default: [project] neodos_size_mb)
+        #[arg(long)]
+        neodos_size: Option<u64>,
+        /// NE2 filesystem blocks (default: neodos_size * 256 = 100 MB at 4 KB/block)
+        #[arg(long)]
+        neodos_blocks: Option<u64>,
         /// Enable boot-time user-mode tests (EnableTests=1 in the SYSTEM hive)
         #[arg(long)]
         enable_tests: bool,
@@ -78,15 +78,15 @@ enum Commands {
         /// Output disk image path
         #[arg(long, default_value = "disk_image.img")]
         output: PathBuf,
-        /// ESP size in MB
-        #[arg(long, default_value_t = 100)]
-        esp_size: u64,
-        /// NeoDOS FS size in MB
-        #[arg(long, default_value_t = 100)]
-        neodos_size: u64,
-        /// NE2 filesystem blocks (default: 25600 = 100 MB at 4 KB/block)
-        #[arg(long, default_value_t = 25600)]
-        blocks: u64,
+        /// ESP size in MB (default: [project] esp_size_mb)
+        #[arg(long)]
+        esp_size: Option<u64>,
+        /// NeoDOS partition size in MB (default: [project] neodos_size_mb)
+        #[arg(long)]
+        neodos_size: Option<u64>,
+        /// NE2 filesystem blocks (default: neodos_size * 256 = 100 MB at 4 KB/block)
+        #[arg(long)]
+        blocks: Option<u64>,
         /// Label for the NE2 volume
         #[arg(long, default_value = "NEODOS")]
         label: String,
@@ -367,7 +367,7 @@ fn resolve_neodos_root(cli_path: Option<PathBuf>) -> Result<PathBuf> {
 fn cmd_build(
     cfg: &config::Config, disc: &discovery::Discovery,
     kernel: bool, bootloader: bool, userbin: bool, nxl: bool, nem: bool,
-    all: bool, quick: bool, image: bool, neodos_size: u64, neodos_blocks: u64,
+    all: bool, quick: bool, image: bool, neodos_size: Option<u64>, neodos_blocks: Option<u64>,
     enable_tests: bool, enable_network_test: bool,
 ) -> Result<()> {
     println!("{} NeoDOS Build", "[*]".bold().cyan());
@@ -378,7 +378,7 @@ fn cmd_build(
         report::print_build_report(&report);
         if image && report.bootloader.unwrap_or(false) {
             cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", true,
+                      None, neodos_size, neodos_blocks, "NEODOS", true,
                       enable_tests, enable_network_test)?;
         } else if image {
             println!("  {} Skipping image generation (build had failures)", "[!]".bold().yellow());
@@ -395,7 +395,7 @@ fn cmd_build(
             // inputs (NLT + NEM drivers) so a quick image never ships a stale
             // driver (NeoDOS #491: stale rtc.nem without EVENT_RTC_WRITE).
             cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                      cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", false,
+                      None, neodos_size, neodos_blocks, "NEODOS", false,
                       enable_tests, enable_network_test)?;
         }
         return Ok(());
@@ -415,7 +415,7 @@ fn cmd_build(
         // #21: refresh image build inputs (NLT + NEM drivers) so partial builds
         // do not fall back to stale gitignored NEM drivers.
         cmd_image(cfg, disc, &cfg.neodos_root.join("disk_image.img"),
-                  cfg.esp_size_mb, neodos_size, neodos_blocks, "NEODOS", false,
+                  None, neodos_size, neodos_blocks, "NEODOS", false,
                   enable_tests, enable_network_test)?;
     }
     Ok(())
@@ -424,12 +424,19 @@ fn cmd_build(
 #[allow(clippy::too_many_arguments)] // CLI dispatch: one flag per argument
 fn cmd_image(
     cfg: &config::Config, disc: &discovery::Discovery,
-    output: &Path, _esp_size: u64, _neodos_size: u64,
-    blocks: u64, label: &str, no_build: bool,
+    output: &Path, esp_size: Option<u64>, neodos_size: Option<u64>,
+    blocks: Option<u64>, label: &str, no_build: bool,
     enable_tests: bool, enable_network_test: bool,
 ) -> Result<()> {
     println!("{} NeoDOS Image Generation", "[*]".bold().cyan());
     println!();
+
+    let (esp_size, neodos_size, blocks) =
+        resolve_image_sizes(cfg, esp_size, neodos_size, blocks);
+    let mut image_cfg = cfg.clone();
+    image_cfg.esp_size_mb = esp_size;
+    image_cfg.neodos_size_mb = neodos_size;
+    let cfg = &image_cfg;
 
     if !no_build {
         println!("  Compiling NLT translation files...");
@@ -498,13 +505,42 @@ fn cmd_run(
 }
 
 fn parse_net_mode(net_str: &str) -> Result<run::NetMode> {
-    match net_str {
+    match net_str.to_ascii_lowercase().as_str() {
         "user" | "nat" => Ok(run::NetMode::User),
         "tap" => Ok(run::NetMode::Tap),
         "bridge" | "bridged" => Ok(run::NetMode::Bridge),
         "none" | "disabled" => Ok(run::NetMode::None),
-        _ => anyhow::bail!("Unknown net mode: {}. Use: user, tap, bridge", net_str),
+        _ => anyhow::bail!(
+            "Unknown net mode: {}. Use: user, tap, bridge, none",
+            net_str
+        ),
     }
+}
+
+/// Map a parsed CLI network mode to the spelling understood by
+/// `vmm::vmcfg_from_config_net`, so `vm start/create --net` behaves like `run`.
+fn net_mode_config_value(mode: run::NetMode) -> &'static str {
+    match mode {
+        run::NetMode::User => "user",
+        run::NetMode::Tap | run::NetMode::Bridge => "bridged",
+        run::NetMode::None => "none",
+    }
+}
+
+/// Resolve image sizes: an explicit CLI value wins, otherwise the project
+/// defaults apply. When `--blocks` is omitted the NE2 filesystem is sized from
+/// the partition size (4 KB blocks), so `--neodos-size` is never silently
+/// ignored.
+fn resolve_image_sizes(
+    cfg: &config::Config,
+    esp_size: Option<u64>,
+    neodos_size: Option<u64>,
+    blocks: Option<u64>,
+) -> (u64, u64, u64) {
+    let esp_size = esp_size.unwrap_or(cfg.esp_size_mb);
+    let neodos_size = neodos_size.unwrap_or(cfg.neodos_size_mb);
+    let blocks = blocks.unwrap_or_else(|| neodos_size.saturating_mul(256));
+    (esp_size, neodos_size, blocks)
 }
 
 /// Resolve the display mode: an explicit CLI value always wins; otherwise the
@@ -767,7 +803,8 @@ fn cmd_vm(cfg: &config::Config, action: &VmAction) -> Result<()> {
             let actual_backend = resolve(backend);
             let b = vmm::create_backend(&actual_backend)?;
             b.check_prerequisites(cfg)?;
-            let vmcfg = vmm::vmcfg_from_config_net(cfg, net.as_deref());
+            let net = net.as_deref().map(parse_net_mode).transpose()?;
+            let vmcfg = vmm::vmcfg_from_config_net(cfg, net.map(net_mode_config_value));
             let vmcfg = vmm::VmConfig {
                 headless: effective_headless(*headless, cfg, &actual_backend),
                 ..vmcfg
@@ -806,7 +843,8 @@ fn cmd_vm(cfg: &config::Config, action: &VmAction) -> Result<()> {
             let actual_backend = resolve(backend);
             let b = vmm::create_backend(&actual_backend)?;
             b.check_prerequisites(cfg)?;
-            let vmcfg = vmm::vmcfg_from_config_net(cfg, net.as_deref());
+            let net = net.as_deref().map(parse_net_mode).transpose()?;
+            let vmcfg = vmm::vmcfg_from_config_net(cfg, net.map(net_mode_config_value));
             println!("{} Creating VM (backend: {})", "[*]".bold().cyan(), actual_backend);
             b.ensure_vm(cfg, &vmcfg)
         }
@@ -837,7 +875,24 @@ mod tests {
         assert_eq!(parse_net_mode("bridge").unwrap(), run::NetMode::Bridge);
         assert_eq!(parse_net_mode("bridged").unwrap(), run::NetMode::Bridge);
         assert_eq!(parse_net_mode("none").unwrap(), run::NetMode::None);
+        assert_eq!(parse_net_mode("DISABLED").unwrap(), run::NetMode::None);
         assert!(parse_net_mode("bogus").is_err());
+    }
+
+    #[test]
+    fn vm_commands_normalize_all_net_spellings() {
+        assert_eq!(net_mode_config_value(run::NetMode::User), "user");
+        assert_eq!(net_mode_config_value(run::NetMode::Tap), "bridged");
+        assert_eq!(net_mode_config_value(run::NetMode::Bridge), "bridged");
+        assert_eq!(net_mode_config_value(run::NetMode::None), "none");
+    }
+
+    #[test]
+    fn image_sizes_default_to_config_and_derive_blocks() {
+        let cfg = config::Config::default(Path::new("/tmp/neodos"));
+        assert_eq!(resolve_image_sizes(&cfg, None, None, None), (100, 100, 25600));
+        assert_eq!(resolve_image_sizes(&cfg, Some(64), Some(200), None), (64, 200, 51200));
+        assert_eq!(resolve_image_sizes(&cfg, None, None, Some(1000)), (100, 100, 1000));
     }
 
     #[test]

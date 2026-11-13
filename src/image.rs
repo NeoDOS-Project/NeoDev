@@ -269,7 +269,14 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     // /tmp/nem_drivers_<pid> output instead of the gitignored data/nem_bin/**
     // fallback (NeoDOS #491).
     if build_drivers {
-        let _ = crate::build::ensure_nem_drivers(disc);
+        if let Err(err) = crate::build::ensure_nem_drivers(disc) {
+            eprintln!(
+                "{} Could not build NEM drivers: {:#}. Falling back to any existing \
+                 data/nem_bin output, which may be stale.",
+                "[!]".bold().yellow(),
+                err
+            );
+        }
     }
     let files = collect_files(cfg, disc)?;
 
@@ -675,40 +682,59 @@ pub fn create_esp_image(cfg: &Config) -> Result<std::path::PathBuf> {
     let esp_image = cfg.neodos_root.join("tmp_esp.img");
     let esp_size = cfg.esp_size_mb;
 
-    Command::new("dd")
-        .args(["if=/dev/zero", &format!("of={}", esp_image.display()), "bs=1M", &format!("count={}", esp_size)])
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-        .status().context("Failed to create ESP image with dd")?;
+    let esp_path = esp_image.to_string_lossy().to_string();
+    run_checked(
+        Command::new("dd").args([
+            "if=/dev/zero",
+            &format!("of={}", esp_image.display()),
+            "bs=1M",
+            &format!("count={}", esp_size),
+        ]),
+        "creating the ESP image with dd",
+    )?;
 
-    Command::new("mkfs.fat")
-        .args(["-F", "32", &esp_image.to_string_lossy()])
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-        .status().context("mkfs.fat not found (install dosfstools)")?;
+    run_checked(
+        Command::new("mkfs.fat").args(["-F", "32", &esp_path]),
+        "formatting the ESP image with mkfs.fat (install dosfstools)",
+    )?;
 
     if which("mmd").is_some() {
         for dir in &["/EFI", "/EFI/BOOT", "/EFI/NeoDOS"] {
-            let _ = Command::new("mmd").args(["-i", &esp_image.to_string_lossy(), dir])
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+            run_checked(
+                Command::new("mmd").args(["-i", &esp_path, dir]),
+                &format!("creating {} in the ESP image with mmd", dir),
+            )?;
         }
 
         let bootloader_src = cfg.neodos_root.join("bootloader.efi");
         let kernel_src = cfg.neodos_root.join("kernel.elf");
 
         if bootloader_src.exists() {
-            let _ = Command::new("mcopy").args(["-i", &esp_image.to_string_lossy(), &bootloader_src.to_string_lossy(), "::/EFI/BOOT/BOOTX64.EFI"])
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-            let _ = Command::new("mcopy").args(["-i", &esp_image.to_string_lossy(), &bootloader_src.to_string_lossy(), "::/EFI/NeoDOS/bootloader.efi"])
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+            let src = bootloader_src.to_string_lossy().to_string();
+            run_checked(
+                Command::new("mcopy").args(["-i", &esp_path, &src, "::/EFI/BOOT/BOOTX64.EFI"]),
+                "copying bootloader.efi to the ESP image",
+            )?;
+            run_checked(
+                Command::new("mcopy").args(["-i", &esp_path, &src, "::/EFI/NeoDOS/bootloader.efi"]),
+                "copying bootloader.efi to the ESP image",
+            )?;
         }
         if kernel_src.exists() {
-            let _ = Command::new("mcopy").args(["-i", &esp_image.to_string_lossy(), &kernel_src.to_string_lossy(), "::/EFI/NeoDOS/kernel.elf"])
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+            let src = kernel_src.to_string_lossy().to_string();
+            run_checked(
+                Command::new("mcopy").args(["-i", &esp_path, &src, "::/EFI/NeoDOS/kernel.elf"]),
+                "copying kernel.elf to the ESP image",
+            )?;
         }
 
         let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
         if fs_image.exists() {
-            let _ = Command::new("mcopy").args(["-i", &esp_image.to_string_lossy(), &fs_image.to_string_lossy(), "::/EFI/NeoDOS/neodos.fs"])
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+            let src = fs_image.to_string_lossy().to_string();
+            run_checked(
+                Command::new("mcopy").args(["-i", &esp_path, &src, "::/EFI/NeoDOS/neodos.fs"]),
+                "copying neodos.fs to the ESP image",
+            )?;
         }
         println!("{} Files copied to ESP", "[✓]".bold().green());
     } else {
@@ -836,6 +862,26 @@ pub fn restore_hive(cfg: &Config) -> Result<()> {
     if backup.exists() {
         std::fs::copy(&backup, &orig)?;
         let _ = std::fs::remove_file(&backup);
+    }
+    Ok(())
+}
+
+/// Run an external command and fail when it exits unsuccessfully. `status()`
+/// only reports spawn errors, so a failing `dd`/`mkfs.fat`/`mcopy` used to be
+/// treated as success and produced a corrupt or non-bootable image.
+fn run_checked(cmd: &mut Command, what: &str) -> Result<()> {
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed: {}", what))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        anyhow::bail!("Failed: {} ({:?}): {}", what, output.status, detail);
     }
     Ok(())
 }
@@ -1010,5 +1056,22 @@ mod tests {
         let mut sorted = all.clone();
         sorted.sort();
         assert_eq!(all, sorted);
+    }
+
+    #[test]
+    fn run_checked_surfaces_failed_commands() {
+        let err = run_checked(
+            Command::new("sh").args(["-c", "echo boom >&2; exit 7"]),
+            "running a failing command",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Failed: running a failing command"));
+        assert!(err.contains("boom"));
+    }
+
+    #[test]
+    fn run_checked_accepts_successful_commands() {
+        run_checked(&mut Command::new("true"), "running true").unwrap();
     }
 }

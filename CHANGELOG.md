@@ -27,6 +27,36 @@
 
 ### Fixed
 
+- **CLI image-size overrides are applied.** `neodev image --esp-size`,
+  `--neodos-size` and `--blocks` (and the matching `build --image` flags) were
+  parsed but ignored: the command always used the configuration values and a
+  default block count. They now override the project defaults, and `--blocks`
+  is derived from `--neodos-size` (256 blocks per MB) when omitted.
+
+- **`vm start` / `vm create --net` honors every network spelling.** `nat`,
+  `user`, `tap`, `bridge`, `bridged`, `none` and `disabled` are normalized the
+  same way as `neodev run`; unknown values are rejected instead of silently
+  falling back to `[vm] network`. The VirtualBox network change now checks
+  `VBoxManage`'s exit status instead of ignoring failures.
+
+- **Actionable bridged-network error.** When `vboxnetflt` is not loaded,
+  VirtualBox fails later with `VERR_SUPDRV_COMPONENT_NOT_FOUND`. NeoDev now
+  detects it before reconfiguring the VM and prints the `modprobe` command and
+  the `modules-load.d` snippet needed to persist it.
+
+- **Configuration errors are no longer swallowed.** A malformed global,
+  project or explicit `--config` file reports its path and TOML error, and a
+  missing `--config` file is an error. An invalid `[vm] network` value is
+  rejected at load time. The default network is now `user` (as documented) and
+  the default NeoDOS partition size is `100` MB, matching the CLI and docs.
+
+- **ESP/image helper failures are no longer ignored.** `dd`, `mkfs.fat`, `mmd`
+  and `mcopy` used `status()?`, which only reports spawn errors: a non-zero exit
+  still produced a "successful" but empty or corrupt ESP image. Their exit
+  status and stderr are now checked. A failure to build NEM drivers is also
+  reported instead of being discarded with `let _ =`, so a stale `data/nem_bin`
+  fallback is visible.
+
 - **Image builder: chained free-list nodes (#28).** The NE2 free-list emitter now
   writes a *chain* of type-3 nodes (`next_lba`) when the region list needs more
   than the 340 regions that fit in one node, reserving the extra nodes from the

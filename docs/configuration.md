@@ -22,7 +22,7 @@ Applied on top of all others.
 ```toml
 [project]
 esp_size_mb = 100
-neodos_size_mb = 10
+neodos_size_mb = 100
 gpt_padding_mb = 12
 kernel_target = "x86_64-unknown-none"
 bootloader_target = "x86_64-unknown-uefi"
@@ -32,7 +32,7 @@ debug = false
 backend = "qemu"          # "qemu" or "virtualbox"
 memory = 512              # MB
 cpus = 2
-network = "bridged"       # "user", "bridged", or "none"
+network = "user"          # "user", "bridged", "tap", or "none"
 
 [qemu]
 kvm = false

@@ -27,7 +27,8 @@ neodev build [--kernel] [--bootloader] [--userbin] [--nxl] [--nem]
 | `--all` | false | Build all (default if no flags) |
 | `--quick` | false | Kernel + bootloader only |
 | `--image` | false | Generate disk image after build |
-| `--neodos-size` | 100 | NeoDOS filesystem size in MB |
+| `--neodos-size` | `[project] neodos_size_mb` | NeoDOS partition size in MB |
+| `--neodos-blocks` | `neodos_size * 256` | NE2 filesystem blocks (4 KB each) |
 
 ## Image
 
@@ -35,6 +36,10 @@ neodev build [--kernel] [--bootloader] [--userbin] [--nxl] [--nem]
 neodev image [--output <path>] [--esp-size <MB>] [--neodos-size <MB>]
              [--blocks <N>] [--label <name>] [--no-build]
 ```
+
+`--esp-size`, `--neodos-size` and `--blocks` default to the project
+configuration. When `--blocks` is omitted it is derived from `--neodos-size`
+(256 blocks per MB), so the filesystem and partition stay in sync.
 
 ## Run
 
@@ -71,11 +76,11 @@ neodev clean [--all] [--kernel] [--bootloader] [--userbin]
 ## VM Management
 
 ```text
-neodev vm start   [--backend qemu|virtualbox] [--headless[=true|false]] [--net nat|bridged]
+neodev vm start   [--backend qemu|virtualbox] [--headless[=true|false]] [--net user|bridged|none]
 neodev vm stop    [--backend qemu|virtualbox]
 neodev vm reset   [--backend qemu|virtualbox]
 neodev vm status  [--backend qemu|virtualbox]
-neodev vm create  [--backend qemu|virtualbox] [--net nat|bridged]
+neodev vm create  [--backend qemu|virtualbox] [--net user|bridged|none]
 neodev vm delete  [--backend qemu|virtualbox]
 ```
 

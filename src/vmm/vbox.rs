@@ -505,15 +505,50 @@ fn modify_vm(cfg: &Config, name: &str, vmcfg: &VmConfig) -> Result<()> {
     }
 
     match vmcfg.network {
-        NetworkMode::User => { Command::new("VBoxManage").args(["modifyvm", name, "--nic1", "nat", "--nictype1", "82540EM", "--cableconnected1", "on"]).status()?; }
+        NetworkMode::User => { modify_vm_network(name, &["--nic1", "nat", "--nictype1", "82540EM", "--cableconnected1", "on"])?; }
         NetworkMode::Bridged => {
+            ensure_bridged_driver()?;
             let bridge_iface = detect_bridge_interface();
-            Command::new("VBoxManage").args(["modifyvm", name, "--nic1", "bridged", "--bridgeadapter1", &bridge_iface, "--nictype1", "82540EM", "--cableconnected1", "on", "--nicpromisc1", "allow-all"]).status()?;
+            modify_vm_network(name, &["--nic1", "bridged", "--bridgeadapter1", &bridge_iface, "--nictype1", "82540EM", "--cableconnected1", "on", "--nicpromisc1", "allow-all"])?;
             println!("  Bridged network via: {}", bridge_iface);
         }
-        NetworkMode::None => { Command::new("VBoxManage").args(["modifyvm", name, "--nic1", "none"]).status()?; }
+        NetworkMode::None => { modify_vm_network(name, &["--nic1", "none"])?; }
     }
     Ok(())
+}
+
+/// Apply a `modifyvm` network change and surface VirtualBox's stderr when it
+/// fails. The previous code used `.status()?`, which treated a non-zero exit as
+/// success and left the VM on its old network configuration.
+fn modify_vm_network(name: &str, args: &[&str]) -> Result<()> {
+    let output = Command::new("VBoxManage")
+        .args(["modifyvm", name])
+        .args(args)
+        .output()
+        .context("Failed to run VBoxManage modifyvm for networking")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "VBoxManage modifyvm failed for VM '{}' ({}): {}",
+            name,
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Bridged networking needs VirtualBox's host network filter driver. Report a
+/// fixable host problem instead of letting `VBoxManage` fail later with the
+/// opaque `VERR_SUPDRV_COMPONENT_NOT_FOUND`.
+fn ensure_bridged_driver() -> Result<()> {
+    if Path::new("/sys/module/vboxnetflt").exists() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Bridged networking requires the VirtualBox host network driver (vboxnetflt), \
+         which is not loaded.\n  On the VM host run:\n    sudo modprobe vboxnetflt\n    \
+         echo vboxnetflt | sudo tee /etc/modules-load.d/virtualbox-bridged.conf"
+    )
 }
 
 /// Point the guest COM1 at `vmcfg.serial_file` (or `vbox_serial.log` in the

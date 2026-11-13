@@ -36,33 +36,24 @@ impl Config {
         if let Ok(home) = env::var("HOME") {
             let global = PathBuf::from(home).join(".config/neodev/neodev.toml");
             if global.exists() {
-                if let Ok(data) = std::fs::read_to_string(&global) {
-                    if let Ok(file_cfg) = toml::from_str::<ConfigFile>(&data) {
-                        cfg.merge_file(file_cfg);
-                    }
-                }
+                cfg.merge_file(read_config_file(&global)?);
             }
         }
 
         // 2. Load project config (neodev.toml in neodos_root)
         let project_cfg = neodos_root.join("neodev.toml");
         if project_cfg.exists() {
-            let data = std::fs::read_to_string(&project_cfg)
-                .context("Failed to read neodev.toml from neodos_root")?;
-            if let Ok(file_cfg) = toml::from_str::<ConfigFile>(&data) {
-                cfg.merge_file(file_cfg);
-            }
+            cfg.merge_file(read_config_file(&project_cfg)?);
         }
 
-        // 3. Load explicit config path (overrides all)
+        // 3. Load explicit config path (overrides all). A path that was
+        // explicitly requested but is missing is a user error, not a silent
+        // fallback to defaults.
         if let Some(path) = config_path {
-            if path.exists() {
-                let data = std::fs::read_to_string(path)
-                    .context("Failed to read explicit config file")?;
-                if let Ok(file_cfg) = toml::from_str::<ConfigFile>(&data) {
-                    cfg.merge_file(file_cfg);
-                }
+            if !path.exists() {
+                anyhow::bail!("Config file not found: {}", path.display());
             }
+            cfg.merge_file(read_config_file(path)?);
         }
 
         // 4. Apply environment variable overrides
@@ -73,21 +64,34 @@ impl Config {
             cfg.vm_backend = val;
         }
 
+        cfg.validate()?;
         Ok(cfg)
+    }
+
+    fn validate(&self) -> Result<()> {
+        const NETWORKS: &[&str] = &["user", "nat", "tap", "bridge", "bridged", "none", "disabled"];
+        let network = self.vm_network.to_ascii_lowercase();
+        if !NETWORKS.contains(&network.as_str()) {
+            anyhow::bail!(
+                "Invalid [vm] network '{}'. Use: user, bridged, none",
+                self.vm_network
+            );
+        }
+        Ok(())
     }
 
     pub fn default(neodos_root: &Path) -> Self {
         Self {
             neodos_root: neodos_root.to_path_buf(),
             esp_size_mb: 100,
-            neodos_size_mb: 10,
+            neodos_size_mb: 100,
             gpt_padding_mb: 12,
             ovmf_code: PathBuf::from("/usr/share/OVMF/OVMF_CODE.fd"),
             ovmf_vars_template: PathBuf::from("/usr/share/OVMF/OVMF_VARS.fd"),
             vm_backend: "qemu".into(),
             vm_memory_mb: 512,
             vm_cpus: 1,
-            vm_network: "bridged".into(),
+            vm_network: "user".into(),
             qemu_kvm: false,
             qemu_bdm: false,
             kernel_target: "x86_64-unknown-none".into(),
@@ -132,6 +136,13 @@ impl Config {
             if let Some(val) = v.vrde_private_key { self.vbox_vrde_private_key = Some(val); }
         }
     }
+}
+
+fn read_config_file(path: &Path) -> Result<ConfigFile> {
+    let data = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file {}", path.display()))?;
+    toml::from_str(&data)
+        .with_context(|| format!("Failed to parse config file {}", path.display()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,5 +253,53 @@ mod tests {
         assert_eq!(cfg.vm_memory_mb, 1024);
         assert_eq!(cfg.vm_cpus, 4);
         assert_eq!(cfg.vm_network, "user");
+    }
+
+    #[test]
+    fn defaults_use_user_networking_and_a_100_mb_filesystem() {
+        let cfg = Config::default(Path::new("/tmp/neodos"));
+        assert_eq!(cfg.vm_network, "user");
+        assert_eq!(cfg.neodos_size_mb, 100);
+    }
+
+    #[test]
+    fn invalid_network_is_rejected() {
+        let mut cfg = Config::default(Path::new("/tmp/neodos"));
+        cfg.vm_network = "briged".into();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("Invalid [vm] network"));
+    }
+
+    #[test]
+    fn malformed_config_reports_the_file_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "neodev-config-test-{}-malformed",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broken.toml");
+        std::fs::write(&path, "[vm\nnetwork =").unwrap();
+
+        let err = read_config_file(&path).unwrap_err().to_string();
+        assert!(err.contains("Failed to parse config file"));
+        assert!(err.contains("broken.toml"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_explicit_config_is_an_error() {
+        let dir = std::env::temp_dir().join(format!(
+            "neodev-config-test-{}-missing",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("does-not-exist.toml");
+
+        let err = Config::load(&dir, Some(&missing)).unwrap_err().to_string();
+        assert!(err.contains("Config file not found"));
+        assert!(err.contains("does-not-exist.toml"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
