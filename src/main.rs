@@ -5,6 +5,7 @@ mod clean;
 mod config;
 mod discovery;
 mod image;
+mod rdp;
 mod report;
 mod run;
 mod test_;
@@ -128,6 +129,33 @@ enum Commands {
         /// Hypervisor backend (default from config)
         #[arg(long)]
         backend: Option<String>,
+    },
+    /// Connect to the VM's RDP (VRDE) endpoint with a local client
+    Rdp {
+        /// RDP host (default: [virtualbox] vrde_address; wildcard -> 127.0.0.1)
+        #[arg(long)]
+        host: Option<String>,
+        /// RDP port (default: [virtualbox] vrde_port)
+        #[arg(long)]
+        port: Option<u16>,
+        /// RDP username
+        #[arg(long, default_value = "neodos")]
+        user: String,
+        /// RDP password (VirtualBox VRDE usually ignores it)
+        #[arg(long, default_value = ".")]
+        password: String,
+        /// Client width in pixels
+        #[arg(long, default_value_t = 1024)]
+        width: u32,
+        /// Client height in pixels
+        #[arg(long, default_value_t = 768)]
+        height: u32,
+        /// Client: auto, sdl-freerdp, xfreerdp, remmina-flatpak, or a command path
+        #[arg(long, default_value = "auto")]
+        client: String,
+        /// Print the client command instead of running it
+        #[arg(long)]
+        print: bool,
     },
     /// Run automated tests
     #[command(visible_alias = "t")]
@@ -309,8 +337,31 @@ enum VmAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let neodos_root = resolve_neodos_root(cli.neodos_path)?;
+    let is_rdp = matches!(&cli.command, Commands::Rdp { .. });
+    let neodos_root = if is_rdp {
+        // `neodev rdp` usually runs on the display host (the laptop), which
+        // may not have a NeoDOS checkout. Fall back to the current directory
+        // so global config and `--config` still apply.
+        resolve_neodos_root(cli.neodos_path.clone())
+            .or_else(|_| std::env::current_dir().context("Could not determine current directory"))
+    } else {
+        Ok(resolve_neodos_root(cli.neodos_path)?)
+    }?;
     let cfg = config::Config::load(&neodos_root, cli.config.as_deref())?;
+
+    if let Commands::Rdp { host, port, user, password, width, height, client, print } = &cli.command {
+        return rdp::run(&cfg, &rdp::RdpOptions {
+            host: host.clone(),
+            port: *port,
+            user: user.clone(),
+            password: password.clone(),
+            width: *width,
+            height: *height,
+            client: client.clone(),
+            print: *print,
+        });
+    }
+
     let disc = discovery::discover(&cfg)?;
 
     match &cli.command {
@@ -320,6 +371,7 @@ fn main() -> Result<()> {
             cmd_image(&cfg, &disc, output, *esp_size, *neodos_size, *blocks, label, *no_build, *enable_tests, *enable_network_test),
         Commands::Run { storage, net, kvm, gdb, bdm, headless, serial, backend } =>
             cmd_run(&cfg, storage, net.as_deref(), *kvm, *gdb, *bdm, *headless, serial.as_deref(), backend.as_deref()),
+        Commands::Rdp { .. } => unreachable!("RDP is dispatched before project discovery"),
         Commands::Test { storage, kvm, iterations, timeout, backend } =>
             cmd_test(&cfg, storage, *kvm, *iterations, *timeout, backend.as_deref()),
         Commands::Dhcp { backend, timeout } =>

@@ -33,6 +33,7 @@ neodev test
 | `neodev image` | Create NE2, ESP, and GPT disk image |
 | `neodev run` | Run NeoDOS in VM (QEMU default) |
 | `neodev run --kvm --gdb` | KVM acceleration + GDB server |
+| `neodev rdp` | Connect to the VM's RDP/VRDE endpoint with a local client |
 | `neodev test` | Run automated tests in headless VM |
 | `neodev clean` | Remove build artifacts |
 | `neodev list` | List discovered projects |
@@ -52,6 +53,7 @@ Example `neodev.toml`:
 ```toml
 [project]
 esp_size_mb = 100
+neodos_size_mb = 100
 kernel_target = "x86_64-unknown-none"
 bootloader_target = "x86_64-unknown-uefi"
 
@@ -59,7 +61,7 @@ bootloader_target = "x86_64-unknown-uefi"
 backend = "qemu"
 memory = 512
 cpus = 2
-network = "bridged"
+network = "user"
 
 [qemu]
 kvm = false
@@ -76,6 +78,15 @@ vrde_private_key = "/etc/vrde/server.key"
 ```
 `vrde_certificate` and `vrde_private_key` (PEM) are optional, but must be set
 together; they enable TLS for the RDP endpoint.
+
+With VRDE enabled, `neodev rdp` connects from the machine that owns the display
+(the laptop/workstation). It prefers `sdl-freerdp`, then the Remmina Flatpak,
+then `xfreerdp`:
+
+```bash
+neodev rdp --host 10.0.1.10          # connect to a remote VM host
+neodev rdp --print                   # print the command instead of running it
+```
 
 ## Locating NeoDOS
 

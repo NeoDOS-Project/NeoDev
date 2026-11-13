@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`neodev rdp` launches a local RDP client against the VM's VRDE endpoint.**
+  It reuses `[virtualbox] vrde_address` / `vrde_port`, maps wildcard bind
+  addresses to loopback, and selects `sdl-freerdp`, the Remmina Flatpak or
+  `xfreerdp` automatically. `--print` prints the resolved command for use from a
+  headless host. This command runs on the machine with the display, so it does
+  not require a NeoDOS checkout or project discovery.
+
 - **GitHub Actions CI (#38).** Pull requests and pushes to `main` now run
   `cargo test --locked`, `cargo clippy --all-targets --locked -- -D warnings` and
   `cargo build --release --locked` on stable Rust with cached artifacts. The five

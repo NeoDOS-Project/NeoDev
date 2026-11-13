@@ -52,6 +52,26 @@ neodev run [--storage ahci|ata|nvme|virtio] [--net user|tap|bridge|none]
 `--net` defaults to `[vm] network`; `--headless` defaults to
 `[virtualbox] headless` for VirtualBox and GUI for QEMU.
 
+## RDP / Remmina
+
+```text
+neodev rdp [--host <host>] [--port <port>] [--user <user>] [--password <pass>]
+           [--width <px>] [--height <px>]
+           [--client auto|sdl-freerdp|xfreerdp|remmina-flatpak|<path>]
+           [--print]
+```
+
+Connects to the VM's VirtualBox VRDE endpoint. Run it on the machine with the
+display, not on a headless VM host. The host defaults to
+`[virtualbox] vrde_address` (wildcard binds map to `127.0.0.1`) and the port to
+`[virtualbox] vrde_port`.
+
+Client selection order with `--client auto` is `sdl-freerdp`, the Remmina
+Flatpak (`flatpak run --command=sdl-freerdp org.remmina.Remmina`), then
+`xfreerdp`. `sdl-freerdp` is recommended because it sends the scancodes NeoDOS
+expects. `--print` prints the resolved command without launching it, which is
+useful from a headless host.
+
 ## Test
 
 ```text
