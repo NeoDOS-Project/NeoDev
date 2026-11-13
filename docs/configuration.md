@@ -55,6 +55,9 @@ properties. Without them VRDE has no TLS certificate and modern RDP clients
 reject the connection (`SSL_CERT_NOT_ON_SERVER`). Generate a self-signed pair
 with `winpr-makecert -format crt -n "CN=NeoDOS" server`.
 
+`esp_size_mb` is a minimum: the ESP grows automatically when the NE2
+filesystem plus the bootloader and kernel would not fit in the configured size.
+
 ### How CLI flags combine with the config
 
 - `--kvm` / `--bdm` only turn the feature **on**; the file value is used when

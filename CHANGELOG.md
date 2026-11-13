@@ -64,6 +64,19 @@
   reported instead of being discarded with `let _ =`, so a stale `data/nem_bin`
   fallback is visible.
 
+- **The ESP grows to fit `neodos.fs`.** When `esp_size_mb` was equal to (or
+  smaller than) the NE2 filesystem, copying the filesystem into the ESP failed
+  with `Disk full` after formatting. The ESP now grows by the payload size plus
+  FAT headroom and prints the new size.
+
+- **The DHCP integration test parses localized result markers.** The guest
+  prints `dhcptest` results in the active locale, but `neodev dhcp` only looked
+  for the English `DHCPTEST_COMPLETE` / `DHCPTEST_PASSED` strings, so a passing
+  Spanish or Catalan run ended in a timeout. The completion, pass and failure
+  markers are now recognized for `en-US`, `es-ES` and `ca-ES`. The test also
+  restores `data/system.hiv` on every exit path, including image-build and
+  VM-start failures, so an aborted run cannot leave the test hive in place.
+
 - **Image builder: chained free-list nodes (#28).** The NE2 free-list emitter now
   writes a *chain* of type-3 nodes (`next_lba`) when the region list needs more
   than the 340 regions that fit in one node, reserving the extra nodes from the

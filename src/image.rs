@@ -682,7 +682,25 @@ pub fn create_esp_image(cfg: &Config) -> Result<std::path::PathBuf> {
     let start = Instant::now();
     println!("{} Creating ESP partition image (FAT32)...", "[*]".bold().cyan());
     let esp_image = cfg.neodos_root.join("tmp_esp.img");
-    let esp_size = cfg.esp_size_mb;
+    let bootloader_src = cfg.neodos_root.join("bootloader.efi");
+    let kernel_src = cfg.neodos_root.join("kernel.elf");
+    let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
+
+    // The ESP holds the whole NE2 filesystem as `neodos.fs`, so an ESP the same
+    // size as the filesystem cannot fit it once FAT metadata is accounted for.
+    // Grow the ESP to fit its payload instead of failing with `Disk full`.
+    let payload_bytes = [&bootloader_src, &kernel_src, &fs_image]
+        .into_iter()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .sum::<u64>();
+    let esp_size = esp_size_for_payload(cfg.esp_size_mb, payload_bytes);
+    if esp_size > cfg.esp_size_mb {
+        println!(
+            "  Growing ESP from {} MB to {} MB to fit neodos.fs",
+            cfg.esp_size_mb, esp_size
+        );
+    }
 
     let esp_path = esp_image.to_string_lossy().to_string();
     run_checked(
@@ -708,9 +726,6 @@ pub fn create_esp_image(cfg: &Config) -> Result<std::path::PathBuf> {
             )?;
         }
 
-        let bootloader_src = cfg.neodos_root.join("bootloader.efi");
-        let kernel_src = cfg.neodos_root.join("kernel.elf");
-
         if bootloader_src.exists() {
             let src = bootloader_src.to_string_lossy().to_string();
             run_checked(
@@ -730,7 +745,6 @@ pub fn create_esp_image(cfg: &Config) -> Result<std::path::PathBuf> {
             )?;
         }
 
-        let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
         if fs_image.exists() {
             let src = fs_image.to_string_lossy().to_string();
             run_checked(
@@ -866,6 +880,12 @@ pub fn restore_hive(cfg: &Config) -> Result<()> {
         let _ = std::fs::remove_file(&backup);
     }
     Ok(())
+}
+
+/// ESP size in MB: the configured size, grown when the FAT32 payload (the
+/// whole NE2 filesystem plus bootloader/kernel) would not fit.
+fn esp_size_for_payload(configured_mb: u64, payload_bytes: u64) -> u64 {
+    configured_mb.max(payload_bytes.div_ceil(1_048_576) + 8)
 }
 
 /// Run an external command and fail when it exits unsuccessfully. `status()`
@@ -1075,5 +1095,12 @@ mod tests {
     #[test]
     fn run_checked_accepts_successful_commands() {
         run_checked(&mut Command::new("true"), "running true").unwrap();
+    }
+
+    #[test]
+    fn esp_grows_to_fit_the_filesystem_payload() {
+        assert_eq!(esp_size_for_payload(100, 100 * 1_048_576), 108);
+        assert_eq!(esp_size_for_payload(100, 10 * 1_048_576), 100);
+        assert_eq!(esp_size_for_payload(128, 100 * 1_048_576), 128);
     }
 }

@@ -218,32 +218,36 @@ pub fn run_dhcp_test(cfg: &Config, disc: &Discovery, backend: &str, timeout_secs
     }
 
     println!("  Generating test registry hive...");
-    image::generate_test_hive(cfg, true)?;
-    let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
-    image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600, true)?;
-    let esp_image = image::create_esp_image(cfg)?;
-    image::create_gpt_image(cfg, &esp_image, &fs_image, &cfg.neodos_root.join("disk_image.img"))?;
-    let _ = std::fs::remove_file(&esp_image);
+    let result = (|| -> Result<()> {
+        image::generate_test_hive(cfg, true)?;
+        let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
+        image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600, true)?;
+        let esp_image = image::create_esp_image(cfg)?;
+        image::create_gpt_image(cfg, &esp_image, &fs_image, &cfg.neodos_root.join("disk_image.img"))?;
+        let _ = std::fs::remove_file(&esp_image);
 
-    let vbox_backend = vmm::create_backend(backend)?;
-    vbox_backend.check_prerequisites(cfg)?;
+        let vbox_backend = vmm::create_backend(backend)?;
+        vbox_backend.check_prerequisites(cfg)?;
 
-    let serial_path = std::path::PathBuf::from(SERIAL_LOG);
-    let disk_image = cfg.neodos_root.join("disk_image.img");
-    let vmcfg = VmConfig {
-        name: "NeoDOS".into(), memory_mb: cfg.vm_memory_mb, cpus: cfg.vm_cpus,
-        efi: true, disk_image: disk_image.clone(), disk_vdi: cfg.neodos_root.join("disk_image.vdi"),
-        serial_file: Some(serial_path), network: NetworkMode::Bridged,
-        headless: true, gdb: false, gdb_port: 1234, storage_mode: StorageMode::Ahci,
-    };
+        let serial_path = std::path::PathBuf::from(SERIAL_LOG);
+        let disk_image = cfg.neodos_root.join("disk_image.img");
+        let vmcfg = VmConfig {
+            name: "NeoDOS".into(), memory_mb: cfg.vm_memory_mb, cpus: cfg.vm_cpus,
+            efi: true, disk_image: disk_image.clone(), disk_vdi: cfg.neodos_root.join("disk_image.vdi"),
+            serial_file: Some(serial_path), network: NetworkMode::Bridged,
+            headless: true, gdb: false, gdb_port: 1234, storage_mode: StorageMode::Ahci,
+        };
 
-    vbox_backend.ensure_vm(cfg, &vmcfg)?;
-    println!("  Starting VM...");
-    let backend_ref: &dyn vmm::HypervisorBackend = vbox_backend.as_ref();
-    let mut instance = backend_ref.start_headless(cfg, &vmcfg)?;
+        vbox_backend.ensure_vm(cfg, &vmcfg)?;
+        println!("  Starting VM...");
+        let backend_ref: &dyn vmm::HypervisorBackend = vbox_backend.as_ref();
+        let mut instance = backend_ref.start_headless(cfg, &vmcfg)?;
 
-    let result = wait_for_dhcp_result(&mut instance, timeout_secs, &start);
-    let _ = instance.kill();
+        let result = wait_for_dhcp_result(&mut instance, timeout_secs, &start);
+        let _ = instance.kill();
+        result
+    })();
+    // Always restore the real hive, even if the image build or VM start failed.
     let _ = image::restore_hive(cfg);
     result
 }
@@ -260,33 +264,67 @@ pub fn run_dhcp_test_qemu(cfg: &Config, disc: &Discovery, timeout_secs: u64) -> 
     }
 
     println!("  Generating test registry hive...");
-    image::generate_test_hive(cfg, true)?;
-    let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
-    image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600, true)?;
-    let esp_image = image::create_esp_image(cfg)?;
-    image::create_gpt_image(cfg, &esp_image, &fs_image, &cfg.neodos_root.join("disk_image.img"))?;
-    let _ = std::fs::remove_file(&esp_image);
+    let result = (|| -> Result<()> {
+        image::generate_test_hive(cfg, true)?;
+        let fs_image = cfg.neodos_root.join("data").join("neodos_image.img");
+        image::build_ne2_image(cfg, disc, &fs_image, "NEODOS", 25600, true)?;
+        let esp_image = image::create_esp_image(cfg)?;
+        image::create_gpt_image(cfg, &esp_image, &fs_image, &cfg.neodos_root.join("disk_image.img"))?;
+        let _ = std::fs::remove_file(&esp_image);
 
-    let backend = vmm::create_backend("qemu")?;
-    backend.check_prerequisites(cfg)?;
+        let backend = vmm::create_backend("qemu")?;
+        backend.check_prerequisites(cfg)?;
 
-    let serial_path = std::path::PathBuf::from(SERIAL_LOG);
-    let disk_image = cfg.neodos_root.join("disk_image.img");
-    let vmcfg = VmConfig {
-        name: "NeoDOS".into(), memory_mb: cfg.vm_memory_mb, cpus: cfg.vm_cpus,
-        efi: true, disk_image: disk_image.clone(), disk_vdi: cfg.neodos_root.join("disk_image.vdi"),
-        serial_file: Some(serial_path), network: NetworkMode::User,
-        headless: true, gdb: false, gdb_port: 1234, storage_mode: StorageMode::Ahci,
-    };
+        let serial_path = std::path::PathBuf::from(SERIAL_LOG);
+        let disk_image = cfg.neodos_root.join("disk_image.img");
+        let vmcfg = VmConfig {
+            name: "NeoDOS".into(), memory_mb: cfg.vm_memory_mb, cpus: cfg.vm_cpus,
+            efi: true, disk_image: disk_image.clone(), disk_vdi: cfg.neodos_root.join("disk_image.vdi"),
+            serial_file: Some(serial_path), network: NetworkMode::User,
+            headless: true, gdb: false, gdb_port: 1234, storage_mode: StorageMode::Ahci,
+        };
 
-    println!("  Starting QEMU...");
-    let backend_ref: &dyn vmm::HypervisorBackend = backend.as_ref();
-    let mut instance = backend_ref.start_headless(cfg, &vmcfg)?;
+        println!("  Starting QEMU...");
+        let backend_ref: &dyn vmm::HypervisorBackend = backend.as_ref();
+        let mut instance = backend_ref.start_headless(cfg, &vmcfg)?;
 
-    let result = wait_for_dhcp_result(&mut instance, timeout_secs, &start);
-    let _ = instance.kill();
+        let result = wait_for_dhcp_result(&mut instance, timeout_secs, &start);
+        let _ = instance.kill();
+        result
+    })();
+    // Always restore the real hive, even if the image build or VM start failed.
     let _ = image::restore_hive(cfg);
     result
+}
+
+/// Localized `dhcptest` markers. The guest locale selects the strings, so the
+/// parser accepts every shipped translation instead of only English.
+const DHCP_COMPLETE_MARKERS: &[&str] = &[
+    "DHCPTEST_COMPLETE",      // en-US
+    "PRUEBA_DHCP_COMPLETADA", // es-ES
+    "PROVA_DHCP_COMPLETADA",  // ca-ES
+];
+const DHCP_PASSED_MARKERS: &[&str] = &[
+    "DHCPTEST_PASSED",      // en-US
+    "PRUEBA_DHCP_SUPERADA", // es-ES
+    "PROVA_DHCP_SUPERADA",  // ca-ES
+];
+const DHCP_FAILED_MARKERS: &[&str] = &[
+    "DHCPTEST_FAILED",      // en-US
+    "PRUEBA_DHCP_FALLADA",  // es-ES
+    "PROVA_DHCP_FALLADA",   // ca-ES
+];
+
+fn contains_any_marker(text: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|marker| text.contains(marker))
+}
+
+fn dhcp_test_complete(text: &str) -> bool {
+    contains_any_marker(text, DHCP_COMPLETE_MARKERS)
+}
+
+fn dhcp_test_passed(text: &str) -> bool {
+    contains_any_marker(text, DHCP_PASSED_MARKERS)
 }
 
 fn wait_for_dhcp_result(instance: &mut Box<dyn vmm::VmInstance>, timeout_secs: u64, start: &Instant) -> Result<()> {
@@ -311,9 +349,9 @@ fn wait_for_dhcp_result(instance: &mut Box<dyn vmm::VmInstance>, timeout_secs: u
             }
         }
         let full_text = output_lines.join("\n");
-        if full_text.contains("DHCPTEST_COMPLETE") {
+        if dhcp_test_complete(&full_text) {
             dhcp_done = true;
-            dhcp_passed = full_text.contains("DHCPTEST_PASSED");
+            dhcp_passed = dhcp_test_passed(&full_text);
             println!("{} DHCP test {}", "[*]".bold().cyan(), if dhcp_passed { "PASSED" } else { "FAILED" });
             break;
         }
@@ -329,9 +367,9 @@ fn wait_for_dhcp_result(instance: &mut Box<dyn vmm::VmInstance>, timeout_secs: u
 }
 
 fn print_dhcp_serial_line(line: &str) {
-    if line.contains("DHCPTEST_COMPLETE") { println!("{} DHCP TEST COMPLETE", "[+]".bold().green()); }
-    else if line.contains("DHCPTEST_PASSED") { println!("{} DHCP TEST PASSED", "[+]".bold().green()); }
-    else if line.contains("DHCPTEST_FAILED") { println!("{} DHCP TEST FAILED", "[-]".bold().red()); }
+    if dhcp_test_complete(line) { println!("{} DHCP TEST COMPLETE", "[+]".bold().green()); }
+    else if dhcp_test_passed(line) { println!("{} DHCP TEST PASSED", "[+]".bold().green()); }
+    else if contains_any_marker(line, DHCP_FAILED_MARKERS) { println!("{} DHCP TEST FAILED", "[-]".bold().red()); }
     else if line.contains("[DHCPTEST]") {
         if line.contains("[PASS]") { println!("  {} {}", "[PASS]".bold().green(), line.trim()); }
         else if line.contains("[FAIL]") { println!("  {} {}", "[FAIL]".bold().red(), line.trim()); }
@@ -373,7 +411,24 @@ fn strip_ansi(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::analyze_results;
+    use super::{analyze_results, dhcp_test_complete, dhcp_test_passed};
+
+    #[test]
+    fn dhcp_markers_match_every_shipped_locale() {
+        for marker in ["DHCPTEST_COMPLETE", "PRUEBA_DHCP_COMPLETADA", "PROVA_DHCP_COMPLETADA"] {
+            assert!(dhcp_test_complete(marker), "completion marker not parsed: {}", marker);
+        }
+        for marker in ["DHCPTEST_PASSED", "PRUEBA_DHCP_SUPERADA", "PROVA_DHCP_SUPERADA"] {
+            assert!(dhcp_test_passed(marker), "pass marker not parsed: {}", marker);
+        }
+    }
+
+    #[test]
+    fn dhcp_markers_ignore_unrelated_serial_lines() {
+        let line = "[DHCPTEST] OFFER from 10.0.1.1: IP=10.0.1.22";
+        assert!(!dhcp_test_complete(line));
+        assert!(!dhcp_test_passed(line));
+    }
 
     #[test]
     fn parses_all_passed_summary() {
