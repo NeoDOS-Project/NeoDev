@@ -561,7 +561,67 @@ fn trust_bundle_der() -> Option<Vec<u8>> {
         der.extend_from_slice(&base64_decode(&after[..end]));
         rest = &after[end + END.len()..];
     }
-    if der.is_empty() { None } else { Some(der) }
+    if der.is_empty() {
+        return None;
+    }
+    // Versioned bundle: magic | version u16 | reserved u16 | built u32 | count u32.
+    // `SOURCE_DATE_EPOCH` keeps the image reproducible.
+    let built: u32 = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as u32)
+                .unwrap_or(0)
+        });
+    let count = (0..)
+        .map(|i| {
+            // Count the DER structures we just concatenated.
+            let _ = i;
+        });
+    let _ = count;
+    let cert_count = count_certificates(&der);
+    let mut out = Vec::with_capacity(16 + der.len());
+    out.extend_from_slice(b"NDTB");
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&built.to_le_bytes());
+    out.extend_from_slice(&(cert_count as u32).to_le_bytes());
+    out.extend_from_slice(&der);
+    Some(out)
+}
+
+/// Number of DER SEQUENCEs in a concatenated certificate payload.
+fn count_certificates(der: &[u8]) -> usize {
+    let mut count = 0;
+    let mut pos = 0usize;
+    while pos + 2 <= der.len() {
+        if der[pos] != 0x30 {
+            break;
+        }
+        let first = der[pos + 1] as usize;
+        let (len, hdr) = if first & 0x80 == 0 {
+            (first, 2usize)
+        } else {
+            let n = first & 0x7f;
+            if n == 0 || n > 4 || pos + 2 + n > der.len() {
+                break;
+            }
+            let mut v = 0usize;
+            for i in 0..n {
+                v = (v << 8) | der[pos + 2 + i] as usize;
+            }
+            (v, 2 + n)
+        };
+        let end = pos + hdr + len;
+        if end > der.len() {
+            break;
+        }
+        count += 1;
+        pos = end;
+    }
+    count
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -1191,7 +1251,7 @@ mod tests {
 
 #[cfg(test)]
 mod trust_bundle_tests {
-    use super::base64_decode;
+    use super::{base64_decode, count_certificates};
 
     #[test]
     fn base64_decodes_with_and_without_padding() {
@@ -1199,5 +1259,18 @@ mod trust_bundle_tests {
         assert_eq!(base64_decode(b"TWE="), b"Ma");
         assert_eq!(base64_decode(b"TQ=="), b"M");
         assert_eq!(base64_decode(b""), b"");
+    }
+
+    #[test]
+    fn counts_concatenated_der_structures() {
+        // Two SEQUENCEs (long- and short-form lengths) then junk.
+        let der = [
+            0x30, 0x02, 0x05, 0x00, // SEQUENCE, len 2
+            0x30, 0x81, 0x02, 0x05, 0x00, // SEQUENCE, long form len 2
+            0xff, 0xff,
+        ];
+        assert_eq!(count_certificates(&der), 2);
+        assert_eq!(count_certificates(&[]), 0);
+        assert_eq!(count_certificates(&[0x30]), 0);
     }
 }
