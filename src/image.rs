@@ -510,6 +510,64 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     Ok(())
 }
 
+/// Decode standard base64 (padding optional). Used to turn the host's PEM CA
+/// bundle into DER; no external dependency is pulled in for it.
+fn base64_decode(input: &[u8]) -> Vec<u8> {
+    fn value(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    for &c in input {
+        if c == b'=' {
+            break;
+        }
+        let Some(v) = value(c) else { continue };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// Build the on-disk trust bundle: every `CERTIFICATE` block of the host PEM
+/// store, base64-decoded and concatenated as DER.
+///
+/// `NEODOS_TRUST_BUNDLE` overrides the source path (CI, tests, a pinned store).
+/// With no source the bundle is omitted and HTTPS fails closed.
+fn trust_bundle_der() -> Option<Vec<u8>> {
+    let path = std::env::var("NEODOS_TRUST_BUNDLE").unwrap_or_else(|_| {
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem".to_string()
+    });
+    let pem = std::fs::read(&path).ok()?;
+    let mut der = Vec::new();
+    let mut rest: &[u8] = &pem;
+    const BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    const END: &[u8] = b"-----END CERTIFICATE-----";
+    while let Some(start) = find_bytes(rest, BEGIN) {
+        let after = &rest[start + BEGIN.len()..];
+        let Some(end) = find_bytes(after, END) else { break };
+        der.extend_from_slice(&base64_decode(&after[..end]));
+        rest = &after[end + END.len()..];
+    }
+    if der.is_empty() { None } else { Some(der) }
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
     let mut files: Vec<FileEntry> = vec![];
     let root = &cfg.neodos_root;
@@ -668,6 +726,23 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
                 push_locale_bucket(&mut files, &loc_dirs, dir_idx, &mut bucket);
             }
         }
+    }
+
+    // D8: trust anchors for libtls, concatenated as DER.
+    match trust_bundle_der() {
+        Some(der) => {
+            println!("  Trust bundle packed: {} bytes", der.len());
+            files.push(FileEntry {
+                name: "/NeoDOS/System/config/roots.der".into(),
+                content: der,
+                mode: MODE_FILE | PERM_R,
+                is_dir: false,
+            });
+        }
+        None => eprintln!(
+            "  {} no CA bundle found; HTTPS will fail closed (set NEODOS_TRUST_BUNDLE)",
+            "[!]".bold().yellow()
+        ),
     }
 
     let nem_dir = format!("/tmp/nem_drivers_{}", std::process::id());
@@ -1111,5 +1186,18 @@ mod tests {
         assert_eq!(esp_size_for_payload(100, 100 * 1_048_576), 108);
         assert_eq!(esp_size_for_payload(100, 10 * 1_048_576), 100);
         assert_eq!(esp_size_for_payload(128, 100 * 1_048_576), 128);
+    }
+}
+
+#[cfg(test)]
+mod trust_bundle_tests {
+    use super::base64_decode;
+
+    #[test]
+    fn base64_decodes_with_and_without_padding() {
+        assert_eq!(base64_decode(b"TWFu"), b"Man");
+        assert_eq!(base64_decode(b"TWE="), b"Ma");
+        assert_eq!(base64_decode(b"TQ=="), b"M");
+        assert_eq!(base64_decode(b""), b"");
     }
 }
