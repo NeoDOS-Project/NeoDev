@@ -223,7 +223,7 @@ fn push_locale_bucket(
     let dir = &loc_dirs[idx];
     for (fname, content) in bucket.drain(..) {
         files.push(FileEntry {
-            name: format!("/System/Locale/{}/{}", dir, fname),
+            name: format!("/NeoDOS/System/Globalization/{}/{}", dir, fname),
             content,
             mode: MODE_FILE | PERM_R,
             is_dir: false,
@@ -285,7 +285,7 @@ pub fn build_ne2_image(cfg: &Config, disc: &Discovery, output: &Path, label: &st
     // driver is present, which is confusing if the image looked "successful".
     let nem_count = files
         .iter()
-        .filter(|f| f.name.starts_with("/System/Drivers/") && f.name.ends_with(".nem"))
+        .filter(|f| f.name.starts_with("/NeoDOS/System/drivers/") && f.name.ends_with(".nem"))
         .count();
     if nem_count == 0 {
         eprintln!(
@@ -516,11 +516,16 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
 
     files.push(FileEntry { name: "/README.TXT".into(), content: b"Welcome to NeoDOS v2!\r\n".to_vec(), mode: MODE_FILE | PERM_R | PERM_W, is_dir: false });
     files.push(FileEntry { name: "/Temp/.empty".into(), content: vec![], mode: MODE_FILE | PERM_R | PERM_W, is_dir: false });
+    // #398: top-level directories of the target layout. `\Users` is populated
+    // at boot by the profile service; the rest are placeholders for installers.
+    for dir in &["/Program Files", "/ProgramData", "/Users"] {
+        files.push(FileEntry { name: (*dir).into(), content: vec![], mode: MODE_DIR | PERM_R | PERM_W, is_dir: true });
+    }
 
     let hiv_path = root.join("data").join("system.hiv");
     if hiv_path.exists() {
         let content = std::fs::read(&hiv_path)?;
-        files.push(FileEntry { name: "/System/Registry/SYSTEM.hiv".into(), content, mode: MODE_FILE | PERM_R, is_dir: false });
+        files.push(FileEntry { name: "/NeoDOS/System/config/SYSTEM.hiv".into(), content, mode: MODE_FILE | PERM_R, is_dir: false });
     }
 
     // A single NE2 directory leaf holds ~28 entries (4096 B block, 8 B header,
@@ -545,7 +550,11 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
     ];
 
     for name in programs_nxe.iter().chain(tools_nxe) {
-        let subdir = if programs_nxe.contains(name) { "Programs" } else { "System/Tools" };
+        // #398: system binaries live under `\NeoDOS\System`. A NE2 directory
+        // leaf holds ~28 entries and multi-block directories are not
+        // implemented, so the tools keep a subdirectory instead of overflowing
+        // the core leaf.
+        let subdir = if programs_nxe.contains(name) { "NeoDOS/System" } else { "NeoDOS/System/Tools" };
         let p = root.join("userbin").join(format!("{}.nxe", name));
         if p.exists() {
             let content = std::fs::read(&p)?;
@@ -584,12 +593,12 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
             .unwrap_or(name.as_str());
         let content = std::fs::read(path)?;
         files.push(FileEntry {
-            name: format!("/System/Libraries/{}", dst),
+            name: format!("/NeoDOS/Libraries/{}", dst),
             content,
             mode: MODE_FILE | PERM_R | PERM_X,
             is_dir: false,
         });
-        println!("  NXL packed: /System/Libraries/{}", dst);
+        println!("  NXL packed: /NeoDOS/Libraries/{}", dst);
     }
 
     // Enabled layouts shipped in /System/Keyboard. Generate all locales with
@@ -599,7 +608,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         let p = root.join("data/keyboard").join(format!("{}.kbd", layout_name));
         if p.exists() {
             let content = std::fs::read(&p).unwrap_or_default();
-            files.push(FileEntry { name: format!("/System/Keyboard/{}.kbd", layout_name), content, mode: MODE_FILE | PERM_R, is_dir: false });
+            files.push(FileEntry { name: format!("/NeoDOS/System/Keyboard/{}.kbd", layout_name), content, mode: MODE_FILE | PERM_R, is_dir: false });
         }
     }
 
@@ -671,7 +680,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         let path = if p.exists() { &p } else { &fallback };
         if path.exists() {
             let content = std::fs::read(path)?;
-            files.push(FileEntry { name: format!("/System/Drivers/{}.nem", nem_name), content, mode: MODE_FILE | PERM_R, is_dir: false });
+            files.push(FileEntry { name: format!("/NeoDOS/System/drivers/{}.nem", nem_name), content, mode: MODE_FILE | PERM_R, is_dir: false });
         }
     }
 
