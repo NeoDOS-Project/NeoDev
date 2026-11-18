@@ -664,7 +664,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         "nslookup", "ntpd", "snapshot", "tcptest", "netsrv", "netcli", "neocurl", "httptest", "uptime", "keyread",
         // Moved out of /Programs to keep its single leaf within capacity.
         // The shell PATH includes System/Tools, so they stay discoverable.
-        "reboot", "shtest", "stresscmd", "tree", "ver", "vol",
+        "reboot", "shtest", "stresscmd", "tree", "ver", "vol", "certctl",
     ];
 
     for name in programs_nxe.iter().chain(tools_nxe) {
