@@ -34,6 +34,12 @@
 
 ### Fixed
 
+- **`shell send` types shifted keys correctly (#52).** QEMU keys joined with
+  `-` are a chord, so batching a whole line left `shift` held after a shifted
+  key and the rest arrived wrong (`dir C:\\Users` typed `dir C:|Users`).
+  `send_keys` now emits one `sendkey` per character through a testable
+  `key_commands` helper.
+
 - **CLI image-size overrides are applied.** `neodev image --esp-size`,
   `--neodos-size` and `--blocks` (and the matching `build --image` flags) were
   parsed but ignored: the command always used the configuration values and a

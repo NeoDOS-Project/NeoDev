@@ -33,9 +33,7 @@ impl QemuAutomation {
             Duration::from_secs(3),
         )
         .context("Failed to connect to QEMU automation monitor")?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .ok();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
 
         // Drain any stale prompt
         let _ = read_until_prompt(&mut stream);
@@ -72,11 +70,7 @@ fn read_until_prompt(stream: &mut TcpStream) -> Result<String> {
         }
     }
     // Strip carriage returns and filter telnet IAC (0xFF) sequences
-    let cleaned: Vec<u8> = buf
-        .iter()
-        .copied()
-        .filter(|&b| b != b'\r')
-        .collect();
+    let cleaned: Vec<u8> = buf.iter().copied().filter(|&b| b != b'\r').collect();
     Ok(String::from_utf8_lossy(&cleaned).to_string())
 }
 
@@ -124,18 +118,29 @@ fn char_to_qemu_keys(c: char) -> Vec<String> {
     }
 }
 
+/// Build the HMP `sendkey` payloads for a string.
+///
+/// One command per character: QEMU treats keys joined with `-` as a chord, so
+/// sending a whole line at once keeps `shift` held after a shifted key and the
+/// following characters arrive shifted (`:` then `\` types `|`, `:` then `/`
+/// types `?`).
+fn key_commands(keys: &str) -> Vec<String> {
+    keys.chars()
+        .filter_map(|c| {
+            let seq = char_to_qemu_keys(c);
+            if seq.is_empty() {
+                None
+            } else {
+                Some(seq.join("-"))
+            }
+        })
+        .collect()
+}
+
 impl super::VmAutomation for QemuAutomation {
     fn send_keys(&self, keys: &str) -> Result<()> {
-        // Batch keys into commands of ~50 to avoid excessively long monitor lines
-        let chars: Vec<char> = keys.chars().collect();
-        for chunk in chars.chunks(50) {
-            let key_seq: Vec<String> =
-                chunk.iter().flat_map(|&c| char_to_qemu_keys(c)).collect();
-            if key_seq.is_empty() {
-                continue;
-            }
-            let cmd = format!("sendkey {}", key_seq.join("-"));
-            self.send_hmp(&cmd)?;
+        for keys in key_commands(keys) {
+            self.send_hmp(&format!("sendkey {keys}"))?;
         }
         Ok(())
     }
@@ -149,5 +154,38 @@ impl super::VmAutomation for QemuAutomation {
         self.send_keys(cmd)?;
         self.send_enter()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{char_to_qemu_keys, key_commands};
+
+    #[test]
+    fn key_commands_are_one_per_character() {
+        // The regression from #52: `:` used to share a chord with the next
+        // key, leaving shift held so `\` arrived as `|`.
+        assert_eq!(
+            key_commands("C:\\dir"),
+            ["shift-c", "shift-semicolon", "backslash", "d", "i", "r"]
+        );
+        assert_eq!(key_commands("/?"), ["slash", "shift-slash"]);
+        assert_eq!(key_commands("a b"), ["a", "spc", "b"]);
+    }
+
+    #[test]
+    fn key_commands_never_join_symbols() {
+        for c in "\\/:;?|_+<>[]{}~`".chars() {
+            let seq = char_to_qemu_keys(c);
+            assert!(!seq.is_empty(), "missing mapping for {c:?}");
+            let cmd = key_commands(&c.to_string());
+            assert_eq!(cmd.len(), 1, "one command for {c:?}");
+            assert_eq!(cmd[0], seq.join("-"));
+        }
+    }
+
+    #[test]
+    fn unmapped_characters_are_skipped() {
+        assert!(key_commands("\u{1F600}").is_empty());
     }
 }
