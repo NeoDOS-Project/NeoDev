@@ -32,6 +32,11 @@
   `bail!` on directory leaf overflow. Helpers `leaf_chunks_of` /
   `build_dir_nodes`; unit tests cover single-leaf and multi-leaf.
 
+### Added
+
+- **Image builder: package `neologon.nxe` (#40).** The logon/runas binary is
+  installed in `C:\NeoDOS\System` and is on the shell PATH.
+
 ### Fixed
 
 - **`shell send` types shifted keys correctly (#52).** QEMU keys joined with
