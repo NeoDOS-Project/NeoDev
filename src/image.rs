@@ -657,6 +657,7 @@ fn collect_files(cfg: &Config, _disc: &Discovery) -> Result<Vec<FileEntry>> {
         "coreren", "coremd", "corerd", "drives", "ps", "coredir",
         "poweroff", "colors", "neokey",
         "nxres", "nxlocale", "nxverify", "ping", "hostname", "neologon",
+        "who", "logoff",
     ];
     let tools_nxe = &[
         "kill", "pri", "fsck", "ndreg", "loadnem", "progress",

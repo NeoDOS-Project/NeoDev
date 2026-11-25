@@ -34,8 +34,9 @@
 
 ### Added
 
-- **Image builder: package `neologon.nxe` (#40).** The logon/runas binary is
-  installed in `C:\NeoDOS\System` and is on the shell PATH.
+- **Image builder: package `neologon.nxe`, `who.nxe`, `logoff.nxe` (#40/#65).**
+  All three live in `C:\NeoDOS\System` (on the shell PATH). Keeping them out
+  of `System/Tools` also avoids the image-layout bug tracked in NeoDOS #792.
 
 ### Fixed
 
