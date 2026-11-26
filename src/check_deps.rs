@@ -135,7 +135,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         allowed: vec!["scheduler", "hal", "arch",
                        "eventbus", "object", "handle",
                        "console", "graphics", "font",
-                       "irp", "dpc", "kwait"],
+                       "irp", "dpc", "kwait", "syscall", "work_queue"],
         forbidden: vec![
             "syscall", "memory", "drivers", "fs", "vfs",
             "buffer", "net", "cm", "security", "timers",
@@ -264,7 +264,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     m.insert("buffer", Subsystem {
         paths: vec!["buffer/"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
-                       "globals", "panic_classification"],
+                       "globals", "drivers", "panic_classification"],
         forbidden: vec![
             "syscall", "input", "console", "graphics",
             "font", "drivers", "fs", "vfs",
@@ -353,7 +353,8 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         paths: vec!["irp/"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "object", "handle", "kwait", "dpc",
-                       "eventbus", "usermode", "globals"],
+                       "eventbus", "usermode", "globals",
+                       "syscall", "work_queue"],
         forbidden: vec![
             "syscall", "input", "console", "graphics",
             "font", "drivers", "fs", "vfs", "buffer",
@@ -522,6 +523,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         paths: vec!["watchdog/"],
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "timers", "interrupts", "globals",
+                       "eventbus", "object",
                        "crash", "panic_classification"],
         forbidden: vec![
             "syscall", "input", "console", "graphics",
@@ -556,7 +558,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "irp", "eventbus", "object", "handle",
                        "dpc", "globals", "fs", "vfs",
-                       "usermode", "cm", "kwait",
+                       "usermode", "cm", "kwait", "security",
                        "panic_classification"],
         forbidden: vec![
             "syscall", "input", "console", "graphics",
@@ -641,7 +643,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
         allowed: vec!["scheduler", "memory", "hal", "arch",
                        "vfs", "fs", "irp", "eventbus",
                        "object", "handle", "dpc", "kwait",
-                       "cm", "security", "usermode",
+                       "cm", "security", "usermode", "buffer", "drivers",
                        "panic_classification"],
         forbidden: vec![
             "syscall", "input", "console", "graphics",
@@ -735,7 +737,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
             "object", "security", "cm", "handle",
             "drivers/block", "irp", "eventbus",
             "graphics", "font", "usermode",
-            "urn", "trace", "net",
+            "urn", "trace", "net", "invariants",
         ],
         forbidden: vec![
             "drivers/ata", "drivers/boot_ahci", "drivers/fat32",
@@ -757,7 +759,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
                        "input", "console", "graphics",
                        "font", "eventbus", "object",
                        "handle", "irp", "dpc",
-                       "cm", "usermode", "globals",
+                       "cm", "usermode", "globals", "syscall", "work_queue",
                        "panic_classification", "kwait"],
         forbidden: vec![
             "syscall",
