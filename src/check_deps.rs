@@ -738,6 +738,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
             "drivers/block", "irp", "eventbus",
             "graphics", "font", "usermode",
             "urn", "trace", "net", "invariants",
+            "drivers/nem", "drivers/driver_runtime", "drivers/rtc_bridge",
         ],
         forbidden: vec![
             "drivers/ata", "drivers/boot_ahci", "drivers/fat32",
@@ -760,6 +761,7 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
                        "font", "eventbus", "object",
                        "handle", "irp", "dpc",
                        "cm", "usermode", "globals", "syscall", "work_queue",
+                       "security", "interrupts", "drivers",
                        "panic_classification", "kwait"],
         forbidden: vec![
             "syscall",
