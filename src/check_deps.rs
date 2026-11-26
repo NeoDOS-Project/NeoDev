@@ -672,8 +672,9 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("panic_classification", Subsystem {
-        paths: vec!["infra/panic_classification.rs"],
-        allowed: vec![],
+        paths: vec!["arch/x64/idt/panic_classification.rs"],
+        // Panic classification inspects IDT/CPU/scheduler state.
+        allowed: vec!["arch", "hal", "scheduler", "trace"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
             "graphics", "font", "drivers", "fs", "vfs",
@@ -707,8 +708,10 @@ fn subsystems() -> HashMap<&'static str, Subsystem> {
     });
 
     m.insert("abi_freeze", Subsystem {
-        paths: vec!["infra/abi_freeze.rs"],
-        allowed: vec!["arch"],
+        paths: vec!["boot/abi_freeze.rs"],
+        // Boot-time ABI validation intentionally inspects the frozen
+        // constants of several subsystems; keep the exception explicit.
+        allowed: vec!["arch", "eventbus", "drivers", "interrupts", "kwait"],
         forbidden: vec![
             "scheduler", "syscall", "input", "console",
             "graphics", "font", "drivers", "fs", "vfs",
